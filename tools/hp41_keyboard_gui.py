@@ -73,34 +73,60 @@ main.c's own debug output (heartbeat, framebuffer dumps, etc.) read back
 and shown in the log pane - so this doubles as the debug console you'd
 otherwise use `screen`/`pyserial` directly for.
 """
+from __future__ import annotations
+
 import argparse
 import queue
 import sys
 import threading
 import tkinter as tk
 from pathlib import Path
+from typing import ClassVar
 
 import serial
 import serial.tools.list_ports
 from PIL import Image, ImageTk
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-KEYBOARD_IMAGE = REPO_ROOT / "HP-41CX_Programmable_Scientific_Calculator_(removed_background,_colour_adjustment).jpg"
+KEYBOARD_IMAGE_NAME = (
+    "HP-41CX_Programmable_Scientific_Calculator_(removed_background,_colour_adjustment).jpg"
+)
+KEYBOARD_IMAGE = REPO_ROOT / KEYBOARD_IMAGE_NAME
 
 BAUD_RATE = 115200  # matches firmware/main.c's stdio_init_all() USB CDC - not the
                     # separate 9600-baud Arduino display link, a different port.
+
+# Power of 10 (Python adaptation), Rule 3: the serial log pane below is
+# the one place this GUI could grow without bound during a long session
+# (every line main.c prints gets appended, forever) - capped rather than
+# excepted, per DEVIATIONS.md's Rule 3 note for this file.
+MAX_LOG_LINES = 2000
+
+
+def check(condition: bool, message: str) -> None:
+    """Power of 10 (Python adaptation), Rule 5 assertion helper.
+
+    Unlike a bare `assert` statement, this is never compiled out under
+    `-O`/`-OO` - see ../DEVIATIONS.md's implementation note on why this
+    project uses `check()` instead of `assert` for anything Rule 5
+    actually requires.
+    """
+    if not condition:
+        raise AssertionError(message)
 
 
 class PressMode:
     """The three button-behavior modes this GUI supports - see the
     module docstring for what each one does and why all three are kept
-    around instead of just the current recommended one."""
+    around instead of just the current recommended one.
+    """
+
     TAP_ONLY = "tap"
     HOLD_ONLY = "hold"
     THRESHOLD = "threshold"
 
     ALL = (TAP_ONLY, HOLD_ONLY, THRESHOLD)
-    LABELS = {
+    LABELS: ClassVar[dict[str, str]] = {
         TAP_ONLY: "Instant tap (no hold)",
         HOLD_ONLY: "Instant hold (no threshold)",
         THRESHOLD: "Threshold (recommended)",
@@ -131,7 +157,7 @@ DISPLAY_SCALE = 0.4
 # below wrap this into the real press/release protocol at click time -
 # a plain tap (e.g. from a script) can still send `key` directly, same
 # as before this session's hold-duration work.
-KEY_MAP = [
+KEY_MAP: list[tuple[str, int, int, int, int, bytes]] = [
     # Top row: ON / USER / [blank card-slot, not a key] / PRGM / ALPHA
     ("ON",    113, 93, 95, 45, b"[ON]"),
     ("USER",  337, 93, 115, 45, b"[USER]"),
@@ -200,12 +226,13 @@ def _hold_press_bytes(key: bytes) -> bytes:
     that isn't a recognized name, so no special-casing is needed here
     for which case a given key is.
     """
+    check(len(key) > 0, "KEY_MAP entry has an empty key")
     if key.startswith(b"[") and key.endswith(b"]"):
         return b"[+" + key[1:-1] + b"]"
     return b"[+" + key + b"]"
 
 
-def find_port():
+def find_port() -> str:
     ports = list(serial.tools.list_ports.comports())
     candidates = [p for p in ports if "usbmodem" in p.device.lower()
                   and "arduino" not in (p.description or "").lower()]
@@ -227,14 +254,14 @@ class SerialLink:
     instead of touching widgets from this thread directly).
     """
 
-    def __init__(self, port):
+    def __init__(self, port: str) -> None:
         self.ser = serial.Serial(port, BAUD_RATE, timeout=0.2)
-        self.line_queue = queue.Queue()
+        self.line_queue: queue.Queue[str] = queue.Queue()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
 
-    def _read_loop(self):
+    def _read_loop(self) -> None:
         buf = b""
         while not self._stop.is_set():
             try:
@@ -248,30 +275,34 @@ class SerialLink:
                 line, buf = buf.split(b"\n", 1)
                 self.line_queue.put(line.decode(errors="replace").rstrip("\r"))
 
-    def send(self, data: bytes):
+    def send(self, data: bytes) -> None:
+        check(len(data) > 0, "SerialLink.send() called with empty data")
         self.ser.write(data)
         self.ser.flush()
 
-    def close(self):
+    def close(self) -> None:
         self._stop.set()
         self.ser.close()
 
 
 class KeyboardApp:
-    def __init__(self, root, link: SerialLink, initial_mode=PressMode.THRESHOLD):
+    def __init__(
+        self, root: tk.Tk, link: SerialLink, initial_mode: str = PressMode.THRESHOLD,
+    ) -> None:
+        check(initial_mode in PressMode.ALL, f"unknown initial_mode: {initial_mode!r}")
         self.link = link
         root.title("HP-41C Keyboard (Soynut)")
 
         # Only one physical mouse button can be down at a time, so a
         # single set of "currently pressed key" fields (rather than
         # per-rectangle state) is enough - see _on_press()/_on_release().
-        self._hold_timer = None   # canvas.after() id for the pending engage check, or None
+        self._hold_timer: str | None = None  # canvas.after() id for the pending engage check
         self._hold_engaged = False  # True once HOLD_ENGAGE_MS has elapsed while still down
         # Mode is captured once per press (in _on_press) rather than
         # re-read live in _on_release/_engage_hold - switching the radio
         # button mid-press (a rare, deliberate action) shouldn't change
         # how a press already in flight gets resolved.
-        self._active_mode = None
+        self._active_mode: str | None = None
         self.press_mode = tk.StringVar(value=initial_mode)
 
         image = Image.open(KEYBOARD_IMAGE)
@@ -282,10 +313,19 @@ class KeyboardApp:
         main = tk.Frame(root)
         main.pack(fill=tk.BOTH, expand=True)
 
-        self.canvas = tk.Canvas(main, width=disp_w, height=disp_h,
-                                 highlightthickness=0)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH)
-        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
+        self.canvas = self._build_canvas(main, disp_w, disp_h)
+        self.status, self.log = self._build_side_panel(main)
+
+        root.after(50, self._poll_serial)
+
+    def _build_canvas(self, main: tk.Frame, disp_w: int, disp_h: int) -> tk.Canvas:
+        """Builds the keyboard photo canvas and binds every KEY_MAP
+        entry's clickable rectangle over it. Split out of __init__ to
+        keep that one under Rule 4's ~60-line target.
+        """
+        canvas = tk.Canvas(main, width=disp_w, height=disp_h, highlightthickness=0)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH)
+        canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
 
         # No <Enter>/<Leave> hover-highlight bindings here - macOS Aqua Tk
         # has a known feedback-loop quirk where changing a canvas item's
@@ -299,16 +339,30 @@ class KeyboardApp:
         # press/release pair each, not continuously re-evaluated against
         # pointer position the way hover detection is, so they don't share
         # that failure mode.
-        for label, cx, cy, hw, hh, key in KEY_MAP:
+        for lbl, cx, cy, hw, hh, key in KEY_MAP:
             x0, y0 = (cx - hw) * DISPLAY_SCALE, (cy - hh) * DISPLAY_SCALE
             x1, y1 = (cx + hw) * DISPLAY_SCALE, (cy + hh) * DISPLAY_SCALE
-            rect = self.canvas.create_rectangle(
-                x0, y0, x1, y1, outline="", fill="", width=2)
-            self.canvas.tag_bind(rect, "<Button-1>",
-                                  lambda e, l=label, k=key, r=rect: self._on_press(l, k, r))
-            self.canvas.tag_bind(rect, "<ButtonRelease-1>",
-                                  lambda e, l=label, k=key, r=rect: self._on_release(l, k, r))
+            rect = canvas.create_rectangle(x0, y0, x1, y1, outline="", fill="", width=2)
 
+            def on_press(
+                _event: tk.Event, lbl: str = lbl, key: bytes = key, rect: int = rect,
+            ) -> None:
+                self._on_press(lbl, key, rect)
+
+            def on_release(
+                _event: tk.Event, lbl: str = lbl, key: bytes = key, rect: int = rect,
+            ) -> None:
+                self._on_release(lbl, key, rect)
+
+            canvas.tag_bind(rect, "<Button-1>", on_press)
+            canvas.tag_bind(rect, "<ButtonRelease-1>", on_release)
+        return canvas
+
+    def _build_side_panel(self, main: tk.Frame) -> tuple[tk.Label, tk.Text]:
+        """Builds the mode-selector radio buttons, status line, and
+        serial log pane. Split out of __init__ alongside _build_canvas()
+        for the same Rule 4 reason.
+        """
         side = tk.Frame(main)
         side.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
@@ -319,16 +373,15 @@ class KeyboardApp:
                             variable=self.press_mode, value=mode,
                             anchor="w").pack(fill=tk.X, anchor="w")
 
-        self.status = tk.Label(side, text="ready", anchor="w")
-        self.status.pack(fill=tk.X)
+        status = tk.Label(side, text="ready", anchor="w")
+        status.pack(fill=tk.X)
 
-        self.log = tk.Text(side, width=60, bg="black", fg="#33ff33",
-                            font=("Menlo", 10), state=tk.DISABLED)
-        self.log.pack(fill=tk.BOTH, expand=True)
+        log = tk.Text(side, width=60, bg="black", fg="#33ff33",
+                       font=("Menlo", 10), state=tk.DISABLED)
+        log.pack(fill=tk.BOTH, expand=True)
+        return status, log
 
-        root.after(50, self._poll_serial)
-
-    def _send_tap(self, label, key):
+    def _send_tap(self, label: str, key: bytes) -> None:
         try:
             self.link.send(key)
         except serial.SerialException as e:
@@ -336,7 +389,7 @@ class KeyboardApp:
             return
         self.status.config(text=f"tapped {label} -> {key!r}")
 
-    def _on_press(self, label, key, rect_id):
+    def _on_press(self, label: str, key: bytes, rect_id: int) -> None:
         # Visual "pressed" flash happens immediately regardless of mode -
         # purely local UI feedback, doesn't need to match the ROM's own
         # timing.
@@ -361,7 +414,7 @@ class KeyboardApp:
             # The first hold implementation this session: every press
             # immediately engages the real hold protocol, no threshold
             # delay. Kept for comparison - see PressMode's docs.
-            self._engage_hold(label, key, rect_id)
+            self._engage_hold(label, key)
             return
 
         # PressMode.THRESHOLD: don't commit to the real hold protocol
@@ -369,10 +422,9 @@ class KeyboardApp:
         # genuine hold or just a normal quick click (see that constant's
         # comment for why). If released first, _on_release() below sends
         # a plain instant tap instead and this timer never fires.
-        self._hold_timer = self.canvas.after(
-            HOLD_ENGAGE_MS, lambda: self._engage_hold(label, key, rect_id))
+        self._hold_timer = self.canvas.after(HOLD_ENGAGE_MS, lambda: self._engage_hold(label, key))
 
-    def _engage_hold(self, label, key, rect_id):
+    def _engage_hold(self, label: str, key: bytes) -> None:
         self._hold_timer = None
         self._hold_engaged = True
         send_bytes = _hold_press_bytes(key)
@@ -383,7 +435,7 @@ class KeyboardApp:
             return
         self.status.config(text=f"holding {label} -> {send_bytes!r}")
 
-    def _on_release(self, label, key, rect_id):
+    def _on_release(self, label: str, key: bytes, rect_id: int) -> None:
         self.canvas.itemconfig(rect_id, outline="")
 
         if self._active_mode == PressMode.TAP_ONLY:
@@ -410,20 +462,32 @@ class KeyboardApp:
             self._hold_timer = None
         self._send_tap(label, key)
 
-    def _poll_serial(self):
+    def _append_log(self, line: str) -> None:
+        """Appends one line to the log pane, then trims from the top if
+        it's grown past MAX_LOG_LINES - Power of 10 (Python adaptation)
+        Rule 3: an unattended long-running session must not let this
+        widget's backing text grow without bound.
+        """
+        self.log.config(state=tk.NORMAL)
+        self.log.insert(tk.END, line + "\n")
+        line_count = int(self.log.index("end-1c").split(".")[0])
+        if line_count > MAX_LOG_LINES:
+            overflow = line_count - MAX_LOG_LINES
+            self.log.delete("1.0", f"{overflow + 1}.0")
+        self.log.see(tk.END)
+        self.log.config(state=tk.DISABLED)
+
+    def _poll_serial(self) -> None:
         try:
             while True:
                 line = self.link.line_queue.get_nowait()
-                self.log.config(state=tk.NORMAL)
-                self.log.insert(tk.END, line + "\n")
-                self.log.see(tk.END)
-                self.log.config(state=tk.DISABLED)
+                self._append_log(line)
         except queue.Empty:
             pass
         self.canvas.after(50, self._poll_serial)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--port", help="Pico's USB serial port (auto-detected if omitted)")
@@ -437,7 +501,7 @@ def main():
     link = SerialLink(port)
 
     root = tk.Tk()
-    app = KeyboardApp(root, link, initial_mode=args.press_mode)
+    KeyboardApp(root, link, initial_mode=args.press_mode)
     try:
         root.mainloop()
     finally:
