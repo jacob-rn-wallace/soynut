@@ -4,7 +4,7 @@
 #include "st7920.h"
 
 // Sole purpose of this program: get ANYTHING to show up on the physical
-// NHD-14432WG LCD over the direct 3-wire serial link, with zero
+// NHD-14432WG LCD over the direct 8-bit parallel link, with zero
 // dependency on the Nut CPU emulator, ROM, key bridge, or Arduino bridge
 // - all of which are proven correct/irrelevant to this problem (see
 // ../CLAUDE.md's "Arduino display bridge" section for the full bring-up
@@ -23,12 +23,10 @@
 //   f - fill GDRAM with 0xFF (solid on - the clearest possible "did
 //       anything land on the glass" test)
 //   k - checkerboard pattern
-//   p - toggle CS polarity (prints new state) - does NOT auto-reinit,
-//       press 'i' afterward to actually re-run init under the new polarity
 //   a - toggle auto-cycle on/off
 
 static void print_help(void) {
-    printf("lcd_bringup: commands: i=reinit c=clear f=fill(solid) k=checkerboard p=toggle-CS-polarity a=toggle-auto-cycle\n");
+    printf("lcd_bringup: commands: i=reinit c=clear f=fill(solid) k=checkerboard a=toggle-auto-cycle\n");
 }
 
 static void do_checkerboard(void) {
@@ -45,8 +43,7 @@ static void do_checkerboard(void) {
 static void run_command(int c) {
     switch (c) {
         case 'i':
-            printf("lcd_bringup: re-running gpio_init + init sequence (CS active_%s)\n",
-                   st7920_get_cs_active_low() ? "low" : "high");
+            printf("lcd_bringup: re-running gpio_init + init sequence\n");
             st7920_gpio_init();
             st7920_run_init_sequence();
             break;
@@ -62,13 +59,6 @@ static void run_command(int c) {
             printf("lcd_bringup: checkerboard\n");
             do_checkerboard();
             break;
-        case 'p': {
-            bool new_state = !st7920_get_cs_active_low();
-            st7920_set_cs_active_low(new_state);
-            printf("lcd_bringup: CS polarity now active-%s (press 'i' to reinit under this setting)\n",
-                   new_state ? "low" : "high");
-            break;
-        }
         default:
             print_help();
             break;
@@ -87,8 +77,7 @@ int main(void) {
 
     st7920_gpio_init();
     st7920_run_init_sequence();
-    printf("lcd_bringup: initial init sequence done (CS active_%s)\n",
-           st7920_get_cs_active_low() ? "low" : "high");
+    printf("lcd_bringup: initial init sequence done\n");
 
     bool auto_cycle = true;
     int auto_state = 0;
@@ -123,9 +112,8 @@ int main(void) {
 
         if (now_ms - last_heartbeat_ms >= 1000) {
             last_heartbeat_ms = now_ms;
-            printf("lcd_bringup: heartbeat t=%lums auto_cycle=%d CS_active_%s\n",
-                   (unsigned long)now_ms, auto_cycle,
-                   st7920_get_cs_active_low() ? "low" : "high");
+            printf("lcd_bringup: heartbeat t=%lums auto_cycle=%d\n",
+                   (unsigned long)now_ms, auto_cycle);
         }
     }
 }

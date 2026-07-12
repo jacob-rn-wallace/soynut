@@ -37,38 +37,17 @@ static void dbg(const char *fmt, ...) {
 // timer before a human (or even a quick scripted keypress) could react.
 #define TARGET_INSTRUCTIONS_PER_SEC 200000
 
-// Minimum spacing between hp41_arduino_bridge_send_display_state() calls
-// - see the big comment at the call site in the main loop below for the
-// full story (CLAUDE.md's "Screen goes blank" section). The Arduino's
-// drawFrameFromRAM() takes ~30-50ms of real wall-clock time per frame,
-// and (since a fix elsewhere made reception impossible, not just
-// unreliable, during that window) sending faster than the Arduino can
-// keep up risks losing an entire rapid burst - including its final,
-// otherwise-correct settled frame - not just a redundant middle one.
-// NOTE: 80ms turned out not to be enough margin in practice (see
-// CLAUDE.md) - uart_write_blocking() only blocks until bytes are queued
-// into the Pico's UART hardware TX FIFO, not until they've actually
-// finished shifting out over the wire (~42ms for the 40-byte packet at
-// 9600 baud), so the true idle gap the Arduino gets is this interval
-// MINUS that ~42ms transmission tail, not the full interval. Bumped up
-// with generous margin to comfortably cover transmission (~42ms) +
-// draw (~30-50ms) + safety margin, rather than trying to model the
-// hardware FIFO's exact timing.
-#define MIN_ARDUINO_SEND_INTERVAL_MS 180
-
 // Full system bring-up: boots the real HP-41 OS ROM (roms/rom_images.c,
 // wired via emu41gcc_compat/nut_rom.c), computes the emulator's LCD state
 // into a framebuffer (hp41_display_bridge.c) whenever it flags a display
 // change, and feeds USB serial bytes into the keyboard buffer
 // (hp41_key_bridge.c). See CLAUDE.md step 6.
 //
-// *** Display output currently goes out over the Arduino bridge, NOT
-// directly to the LCD - see CLAUDE.md "Arduino display bridge" and
-// pins.h. The direct path (st7920_init()/st7920_clear()/
-// hp41_display_render(), which pushes straight to the LCD over
-// firmware/st7920.c) is fully intact below, just commented out - swap
-// the two marked blocks back once a better level shifter is in and the
-// direct path is worth retrying. ***
+// *** Display output goes directly to the LCD over firmware/st7920.c's
+// 8-bit parallel drive - see CLAUDE.md "Hardware" and pins.h. The
+// Arduino bridge (hp41_arduino_bridge.h/.c) is kept intact but dormant,
+// not deleted - see pins.h's "Arduino display bridge" note for how to
+// swap back to it if the direct link ever needs to be bypassed. ***
 //
 // Display bring-up's static test bitmaps (bitmaps.c/.h) are still built
 // but no longer called here either - kept around as a hardware-debugging
@@ -88,17 +67,6 @@ static void dbg(const char *fmt, ...) {
 static void drain_usb_bytes(void) {
     int c;
     while ((c = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT) {
-        // TEMPORARY: '`' has no HP-41 keycode (tabcode['`']==0, see
-        // hp41_key_bridge.c), repurposed here as a diagnostic trigger
-        // to send a fixed, captured-known-good "2.0000" payload
-        // directly to the Arduino, bypassing the Nut CPU/ROM entirely
-        // - isolates whether this specific content renders correctly
-        // in isolation, free of the normal 3-frames-per-key burst
-        // timing. See hp41_arduino_bridge_send_test_payload().
-        if (c == '`') {
-            hp41_arduino_bridge_send_test_payload();
-            continue;
-        }
         // TEMPORARY: confirms bytes are actually arriving over USB and
         // shows the key bridge's effect on keybuffer[] directly.
         dbg("soynut: got byte 0x%02X ('%c'), lgkeybuf %d -> ",
@@ -123,12 +91,12 @@ int main(void) {
         sleep_ms(1000);
     }
 
-    // dbg("soynut: st7920_init()...\n");
-    // st7920_init();
-    // dbg("soynut: st7920_clear()...\n");
-    // st7920_clear();
-    dbg("soynut: hp41_arduino_bridge_init()...\n");
-    hp41_arduino_bridge_init();
+    dbg("soynut: st7920_init()...\n");
+    st7920_init();
+    dbg("soynut: st7920_clear()...\n");
+    st7920_clear();
+    // dbg("soynut: hp41_arduino_bridge_init()...\n");
+    // hp41_arduino_bridge_init(); // dormant - see pins.h "Arduino display bridge" note
     dbg("soynut: nut_boot()...\n");
     nut_boot();
     dbg("soynut: entering main loop\n");
@@ -136,13 +104,6 @@ int main(void) {
     static uint8_t framebuf[LCD_FB_SIZE];
     int render_count = 0;
     uint32_t last_heartbeat_ms = to_ms_since_boot(get_absolute_time());
-    // Paces hp41_arduino_bridge_send_display_state() calls - see the big
-    // comment at the call site below for why this exists (the Arduino
-    // can only receive+decode+draw a frame roughly every ~60-80ms, and
-    // sending faster than that used to cause dropped/corrupted frames,
-    // sometimes including the final settled one - see CLAUDE.md's
-    // "Screen goes blank" section).
-    uint32_t last_arduino_send_ms = 0;
 
     // Real HP-41 hardware halts the CPU clock entirely after POWOFF and
     // only resumes it via a hardware keyboard-scan interrupt, which
@@ -263,30 +224,19 @@ int main(void) {
         if (fdsp) {
             render_count++;
 
-            // Still computed locally purely as ground-truth debug output
-            // (ASCII art + checksum below) - independent of whatever the
-            // Arduino does with the data it actually receives. What goes
-            // out over the wire now is the compact raw display state
-            // (see hp41_arduino_bridge_send_display_state()), not this
-            // framebuffer - the Arduino re-derives an identical
-            // framebuffer on its own side, from its own copy of the same
-            // segment/pixel tables (see NHD14432_DisplayBridge/
-            // hp41_display_tables_avr.h). If the two ever disagree, that
-            // means the tables or decode logic have drifted between the
-            // two sides, not a display bug.
             hp41_display_compute_framebuffer(framebuf);
 
             // TEMPORARY: ground-truth verification - dumps exactly what the
-            // ROM computed for display, independent of the Arduino/wiring/
-            // LCD chain entirely, plus an XOR checksum (same algorithm as
-            // hp41_arduino_bridge_send_frame()'s wire checksum) to compare
-            // by eye against known values (e.g. the 3 stock Arduino test
-            // bitmaps' checksums) without needing the full ASCII art.
+            // ROM computed for display, plus an XOR checksum, to compare
+            // by eye against known values (e.g. the cold-start "MEMORY
+            // LOST" screen's expected lit-pixel count/checksum - see
+            // tests/display_bridge_test.c) without needing the full ASCII
+            // art.
             uint8_t checksum = 0;
             for (int i = 0; i < LCD_FB_SIZE; i++) {
                 checksum ^= framebuf[i];
             }
-            dbg("soynut: sending display state #%d to Arduino (PC=0x%04X, instr=%d, local checksum=0x%02X)\n",
+            dbg("soynut: rendering display state #%d (PC=0x%04X, instr=%d, checksum=0x%02X)\n",
                    render_count, regPC, cptinstr, checksum);
             // ASCII-art framebuffer dump - disabled (too verbose for
             // day-to-day use over USB serial). Checksum above is still
@@ -301,40 +251,8 @@ int main(void) {
             //     putchar('\n');
             // }
 
-            // Pace sends to the Arduino - the ROM can legitimately emit
-            // several fdsp events in quick succession per keypress (a
-            // real, normal "settle, settle, final" pattern, not a bug),
-            // but the Arduino can only fully receive+decode+draw a frame
-            // roughly every ~30-50ms. Sending faster than that used to
-            // cause dropped frames - usually harmless (the dropped one
-            // was a duplicate of its neighbor) but not always: CLX
-            // (backspace) right after a digit produces 4 rapid updates
-            // instead of the usual 3, and was observed on real hardware
-            // to drop *all four*, including the final correct one,
-            // leaving the display stuck blank until an unrelated later
-            // keypress - see CLAUDE.md's "Screen goes blank" section.
-            // Blocking here (rather than skipping the send) guarantees
-            // every update - including the final one - always eventually
-            // reaches the Arduino, just not necessarily instantly; a few
-            // tens of ms of extra latency on intermediate, already-
-            // invisible settling frames is not perceptible to a human.
-            uint32_t now_send_ms = to_ms_since_boot(get_absolute_time());
-            uint32_t since_last_send_ms = now_send_ms - last_arduino_send_ms;
-            // TEMPORARY prints used to diagnose why an earlier, shorter
-            // interval (80ms) still weren't enough margin - confirmed
-            // fixed and no longer needed day-to-day, left here
-            // commented out rather than deleted (see CLAUDE.md).
-            // dbg("soynut: pacing check: since_last_send_ms=%lu (last=%lu now=%lu)\n",
-            //     (unsigned long)since_last_send_ms, (unsigned long)last_arduino_send_ms, (unsigned long)now_send_ms);
-            if (last_arduino_send_ms != 0 && since_last_send_ms < MIN_ARDUINO_SEND_INTERVAL_MS) {
-                uint32_t wait_ms = MIN_ARDUINO_SEND_INTERVAL_MS - since_last_send_ms;
-                // dbg("soynut: pacing: sleeping %lu ms before send\n", (unsigned long)wait_ms);
-                sleep_ms(wait_ms);
-            }
-            hp41_arduino_bridge_send_display_state();
-            last_arduino_send_ms = to_ms_since_boot(get_absolute_time());
-            // hp41_arduino_bridge_send_frame(framebuf); // old, fatter wire format - see hp41_arduino_bridge.h
-            // st7920_draw_frame(framebuf); // direct-drive path - dormant again, see CLAUDE.md
+            st7920_draw_frame(framebuf);
+            // hp41_arduino_bridge_send_display_state(); // dormant - see pins.h "Arduino display bridge" note
             fdsp = 0;
         }
 

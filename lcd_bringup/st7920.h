@@ -9,14 +9,8 @@
 #define LCD_BYTES_PER_ROW (LCD_WIDTH_PX / 8)                     // 18
 #define LCD_FB_SIZE       (LCD_BYTES_PER_ROW * LCD_HEIGHT_PX)    // 576
 
-// CS polarity is runtime-toggleable (not a compile-time #define like the
-// main firmware's st7920.c) specifically so it can be flipped from a
-// serial command without a rebuild+reflash cycle - see main.c.
-void st7920_set_cs_active_low(bool active_low);
-bool st7920_get_cs_active_low(void);
-
-// Just configures the 3 GPIOs as outputs in their idle state - no LCD
-// commands sent. Safe to call repeatedly.
+// Just configures the GPIOs (RS, E, DB0-7) as outputs in their idle
+// state - no LCD commands sent. Safe to call repeatedly.
 void st7920_gpio_init(void);
 
 // Sends the actual ST7920 power-on init command sequence (function set,

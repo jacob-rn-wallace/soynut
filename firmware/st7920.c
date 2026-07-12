@@ -3,67 +3,45 @@
 
 #include "pico/stdlib.h"
 
-// --- Low-level 3-wire serial bus ----------------------------------------
+// --- Low-level 8-bit parallel bus ---------------------------------------
 //
-// R/W is fixed to 0 (write) in every transaction - we never read the busy
-// flag, same as the parallel wiring this replaced - so every write is
-// followed by a fixed delay instead. Per the ST7920 datasheet, most
-// instructions/data writes complete within ~72us; Clear Display and Return
-// Home need ~1.6ms. These are conservative pads, not hardware-timed (this
-// part is unchanged from the parallel version - the ST7920's internal
-// command execution time doesn't depend on which bus reaches it).
+// Confirmed directly against the NHD-14432WG-BTFH-VT datasheet's own
+// "Pin Description - Parallel Interface" table and its 8051 reference
+// code (reference-material/datasheets/NHD-14432WG-BTFH-VT.pdf): RS
+// selects instruction(0)/data(1), R/W is fixed 0 (write-only design -
+// tied directly to GND in hardware, no Pico pin at all, so it's never
+// touched here), and E is FALLING-EDGE triggered - the datasheet's own
+// example (Wcom()/Wdata()) sets RS + the data bus, raises E, waits
+// briefly, then drops E to actually latch the byte. That's exactly the
+// sequence below. Verified working on real hardware via lcd_bringup/
+// (solid-fill + checkerboard test patterns, both rendered correctly)
+// before being adopted here - see pins.h's comment for that history.
 //
-// The serial protocol itself (sync byte + two nibble bytes, MSB-first,
-// SCLK idle low) is NOT from the NHD-14432WG-BTFH-VT datasheet - it
-// doesn't document serial timing at all, only the pin names. This is the
-// standard ST7920 serial protocol used near-universally elsewhere. CS
-// polarity, however, IS from that datasheet's text (active low) - see
-// pins.h's big warning: this contradicts common ST7920 serial-module
-// practice (active high) and is unverified. Flip LCD_CS_ACTIVE_LOW below
-// first if the display doesn't respond at all.
+// The GDRAM addressing and command sequence (init timing, address
+// mapping) are unchanged from the previously-dormant 3-wire-serial
+// version of this file - those are ST7920-controller-level facts, not
+// bus-specific, and were already cross-checked against a separately
+// hardware-validated reference (see CLAUDE.md). Only this file's bus
+// transport layer (write_byte's actual pin wiggling) changed.
 
-#define LCD_CS_ACTIVE_LOW 0
+static const uint DATA_PINS[8] = {
+    PIN_LCD_DB0, PIN_LCD_DB1, PIN_LCD_DB2, PIN_LCD_DB3,
+    PIN_LCD_DB4, PIN_LCD_DB5, PIN_LCD_DB6, PIN_LCD_DB7,
+};
 
-#define BIT_DELAY_US 5 // conservative; nowhere near this interface's real speed limit
-// (tried 100us to rule out the level shifter's rise time as the cause of
-// a blank display - no change, reverted back to 5us to keep this a
-// single-variable experiment; see CLAUDE.md for the full history)
+#define BUS_DELAY_US 2 // generous vs. the datasheet's ns-scale address/data setup and E pulse-width figures
 
-static inline void cs_select(void) {
-    gpio_put(PIN_LCD_CS, LCD_CS_ACTIVE_LOW ? 0 : 1);
-}
-
-static inline void cs_deselect(void) {
-    gpio_put(PIN_LCD_CS, LCD_CS_ACTIVE_LOW ? 1 : 0);
-}
-
-// Shifts one byte out MSB-first. SCLK idles low; SID is set up while SCLK
-// is low and (per standard ST7920 serial practice) sampled by the
-// controller on SCLK's rising edge - equivalent to SPI mode 0.
-static void shift_out_byte(uint8_t b) {
-    for (int i = 7; i >= 0; i--) {
-        gpio_put(PIN_LCD_SCLK, 0);
-        gpio_put(PIN_LCD_SID, (b >> i) & 1);
-        busy_wait_us(BIT_DELAY_US);
-        gpio_put(PIN_LCD_SCLK, 1);
-        busy_wait_us(BIT_DELAY_US);
-    }
-    gpio_put(PIN_LCD_SCLK, 0);
-}
-
-// Each ST7920 serial write is 3 bytes: a sync byte encoding RS/RW
-// (11111 RW RS 0 - RW is always 0 here, write-only), then the data byte
-// split into two nibble-in-upper-bits bytes (high nibble, then low
-// nibble shifted up) - the controller reassembles them internally. This
-// is the standard ST7920 serial framing, not specific to this module.
 static void write_byte(bool is_data, uint8_t value, uint32_t delay_us) {
-    uint8_t sync = 0xF8 | (is_data ? 0x02 : 0x00);
+    gpio_put(PIN_LCD_RS, is_data ? 1 : 0);
+    for (int i = 0; i < 8; i++) {
+        gpio_put(DATA_PINS[i], (value >> i) & 1);
+    }
+    busy_wait_us(BUS_DELAY_US); // address/data setup before E rises
 
-    cs_select();
-    shift_out_byte(sync);
-    shift_out_byte(value & 0xF0);
-    shift_out_byte((uint8_t)(value << 4));
-    cs_deselect();
+    gpio_put(PIN_LCD_E, 1);
+    busy_wait_us(BUS_DELAY_US); // E pulse width / data setup before E falls
+    gpio_put(PIN_LCD_E, 0);     // falling edge - this is what actually latches the byte
+    busy_wait_us(BUS_DELAY_US); // data hold time after E falls
 
     busy_wait_us(delay_us);
 }
@@ -92,14 +70,15 @@ static void set_gdram_addr(uint8_t vertical, uint8_t horizontal) {
 }
 
 void st7920_init(void) {
-    gpio_init(PIN_LCD_CS);
-    gpio_init(PIN_LCD_SID);
-    gpio_init(PIN_LCD_SCLK);
-    gpio_set_dir(PIN_LCD_CS, GPIO_OUT);
-    gpio_set_dir(PIN_LCD_SID, GPIO_OUT);
-    gpio_set_dir(PIN_LCD_SCLK, GPIO_OUT);
-    gpio_put(PIN_LCD_SCLK, 0);
-    cs_deselect();
+    gpio_init(PIN_LCD_RS);
+    gpio_init(PIN_LCD_E);
+    gpio_set_dir(PIN_LCD_RS, GPIO_OUT);
+    gpio_set_dir(PIN_LCD_E, GPIO_OUT);
+    for (int i = 0; i < 8; i++) {
+        gpio_init(DATA_PINS[i]);
+        gpio_set_dir(DATA_PINS[i], GPIO_OUT);
+    }
+    gpio_put(PIN_LCD_E, 0);
 
     sleep_ms(40); // power-on delay per datasheet (>40ms)
 
@@ -141,10 +120,7 @@ void st7920_clear(void) {
 // to y=0-31, no bank-select trick needed - this panel is exactly one
 // "half" of the standard ST7920 128x64 addressing convention. Each row
 // is 9 words (LCD_BYTES_PER_ROW/2 = 18/2 = 9), covering the full 144px
-// width in one contiguous burst after a single address-set. The
-// previous version of this function guessed a "fold columns 128-143
-// into the vertical+32 bank" scheme that was never actually confirmed -
-// that guess was wrong; this replaces it.
+// width in one contiguous burst after a single address-set.
 void st7920_draw_frame(const uint8_t *fb) {
     for (int y = 0; y < LCD_HEIGHT_PX; y++) {
         const uint8_t *row = fb + (size_t)y * LCD_BYTES_PER_ROW;

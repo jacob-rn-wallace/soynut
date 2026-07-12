@@ -3,67 +3,43 @@
 
 #include "pico/stdlib.h"
 
-// --- Low-level 3-wire serial bus ----------------------------------------
+// --- Low-level 8-bit parallel bus ---------------------------------------
 //
-// Protocol verified bit-for-bit against the real ST7920 controller
-// datasheet (ST7920.pdf, repo root) - the "Serial interface" section's
-// timing diagram (p.26) and the 8051 reference routines (p.27), not just
-// "standard practice" as previously assumed. Sync byte, nibble framing,
-// and CS-spans-all-24-bits behavior all match exactly.
+// Confirmed directly against the NHD-14432WG-BTFH-VT datasheet's own
+// "Pin Description - Parallel Interface" table and its 8051 reference
+// code (both in reference-material/datasheets/NHD-14432WG-BTFH-VT.pdf):
+// RS selects instruction(0)/data(1), R/W is fixed 0 (write-only design -
+// tied directly to GND in hardware, no Pico pin at all, so it's never
+// touched here), and E is FALLING-EDGE triggered - the datasheet's own
+// example (Wcom()/Wdata()) sets RS + the data bus, raises E, waits
+// briefly, then drops E to actually latch the byte. That's exactly the
+// sequence below.
 //
-// CS polarity: that same datasheet's pin table (p.7) and timing diagram
-// (p.44, 8051 code p.27's "SETB CS ... CLR CS") both show CS is
-// ACTIVE-HIGH ("1: chip enabled") - this contradicts the NHD-14432WG
-// module's own datasheet text ("Active LOW Chip Select"). Runtime
-// toggleable here (see st7920_set_cs_active_low()) so both can be tried
-// without a rebuild.
+// The GDRAM addressing and command sequence (init timing, GDRAM address
+// mapping) are unchanged from the previously-dormant 3-wire-serial
+// version of this file - those are ST7920-controller-level facts, not
+// bus-specific, and were already cross-checked against a separately
+// hardware-validated reference (see ../CLAUDE.md). Only this file's bus
+// transport layer (write_byte/shift_out_byte equivalent) changed.
 
-static bool cs_active_low = false; // matches the real ST7920 datasheet's "CS=1 enables"
+static const uint DATA_PINS[8] = {
+    PIN_LCD_DB0, PIN_LCD_DB1, PIN_LCD_DB2, PIN_LCD_DB3,
+    PIN_LCD_DB4, PIN_LCD_DB5, PIN_LCD_DB6, PIN_LCD_DB7,
+};
 
-void st7920_set_cs_active_low(bool active_low) {
-    cs_active_low = active_low;
-}
+#define BUS_DELAY_US 2 // generous vs. the datasheet's ns-scale address/data setup and E pulse-width figures
 
-bool st7920_get_cs_active_low(void) {
-    return cs_active_low;
-}
-
-#define BIT_DELAY_US 5
-
-static inline void cs_select(void) {
-    gpio_put(PIN_LCD_CS, cs_active_low ? 0 : 1);
-}
-
-static inline void cs_deselect(void) {
-    gpio_put(PIN_LCD_CS, cs_active_low ? 1 : 0);
-}
-
-// Shifts one byte out MSB-first. SCLK idles low; SID is set up while SCLK
-// is low and sampled by the controller on SCLK's rising edge (SPI mode 0
-// equivalent) - matches ST7920.pdf p.44's timing diagram.
-static void shift_out_byte(uint8_t b) {
-    for (int i = 7; i >= 0; i--) {
-        gpio_put(PIN_LCD_SCLK, 0);
-        gpio_put(PIN_LCD_SID, (b >> i) & 1);
-        busy_wait_us(BIT_DELAY_US);
-        gpio_put(PIN_LCD_SCLK, 1);
-        busy_wait_us(BIT_DELAY_US);
-    }
-    gpio_put(PIN_LCD_SCLK, 0);
-}
-
-// Each ST7920 serial write is 3 bytes: sync (11111 RW RS 0, RW always 0 -
-// write only), then the data byte split into two nibble-in-upper-bits
-// bytes. Matches ST7920.pdf p.26/27 exactly - verified bit position by
-// bit position against the 8051 reference routine.
 static void write_byte(bool is_data, uint8_t value, uint32_t delay_us) {
-    uint8_t sync = 0xF8 | (is_data ? 0x02 : 0x00);
+    gpio_put(PIN_LCD_RS, is_data ? 1 : 0);
+    for (int i = 0; i < 8; i++) {
+        gpio_put(DATA_PINS[i], (value >> i) & 1);
+    }
+    busy_wait_us(BUS_DELAY_US); // address/data setup before E rises
 
-    cs_select();
-    shift_out_byte(sync);
-    shift_out_byte(value & 0xF0);
-    shift_out_byte((uint8_t)(value << 4));
-    cs_deselect();
+    gpio_put(PIN_LCD_E, 1);
+    busy_wait_us(BUS_DELAY_US); // E pulse width / data setup before E falls
+    gpio_put(PIN_LCD_E, 0);     // falling edge - this is what actually latches the byte
+    busy_wait_us(BUS_DELAY_US); // data hold time after E falls
 
     busy_wait_us(delay_us);
 }
@@ -92,14 +68,15 @@ static void set_gdram_addr(uint8_t vertical, uint8_t horizontal) {
 }
 
 void st7920_gpio_init(void) {
-    gpio_init(PIN_LCD_CS);
-    gpio_init(PIN_LCD_SID);
-    gpio_init(PIN_LCD_SCLK);
-    gpio_set_dir(PIN_LCD_CS, GPIO_OUT);
-    gpio_set_dir(PIN_LCD_SID, GPIO_OUT);
-    gpio_set_dir(PIN_LCD_SCLK, GPIO_OUT);
-    gpio_put(PIN_LCD_SCLK, 0);
-    cs_deselect();
+    gpio_init(PIN_LCD_RS);
+    gpio_init(PIN_LCD_E);
+    gpio_set_dir(PIN_LCD_RS, GPIO_OUT);
+    gpio_set_dir(PIN_LCD_E, GPIO_OUT);
+    for (int i = 0; i < 8; i++) {
+        gpio_init(DATA_PINS[i]);
+        gpio_set_dir(DATA_PINS[i], GPIO_OUT);
+    }
+    gpio_put(PIN_LCD_E, 0);
 }
 
 void st7920_run_init_sequence(void) {

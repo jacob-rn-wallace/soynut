@@ -5,7 +5,7 @@
 #include <stddef.h>
 
 // NHD-14432WG-BTFH-VT: 144 x 32 graphic LCD, ST7920 controller, wired
-// 8-bit parallel (see pins.h / HANDOFF.md).
+// 8-bit parallel (see pins.h / CLAUDE.md).
 
 #define LCD_WIDTH_PX   144
 #define LCD_HEIGHT_PX  32

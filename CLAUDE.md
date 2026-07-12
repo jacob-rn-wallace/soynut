@@ -25,15 +25,23 @@ own.
 Confirmed working end-to-end on real hardware: the real HP-41 ROM boots
 on the Pico 2, correctly shows `MEMORY LOST` on cold start, accepts
 keypresses via a USB-serial protocol (typed by hand, or via the included
-clickable on-screen keyboard GUI), and drives the physical LCD via an
-Arduino Uno display bridge. Press-and-hold key behavior (USER-mode label
-flash / nullify-on-long-hold) is implemented and confirmed. The
+clickable on-screen keyboard GUI), and drives the physical LCD directly
+over an 8-bit parallel link — three 4-channel bidirectional level
+shifter boards cover the 10 shifted signals (`RS`/`E`/`DB0-7`; `R/W` is
+tied straight to GND and needs no shifter channel). Both the cold-start
+`MEMORY LOST` screen and live keypress-driven redraws have been
+confirmed on the physical glass. Press-and-hold key behavior (USER-mode
+label flash / nullify-on-long-hold) is implemented and confirmed. The
 calculator auto-powers-off after each keypress the same way the real ROM
 timeout logic does — see "Known unknowns" for what's still open.
 
-The direct Pico→LCD serial link (no Arduino in between) is implemented,
-protocol-verified, but not yet lit up on real hardware — parked pending
-a better level shifter. See "Direct Pico→LCD serial link" below.
+The Arduino Uno display bridge (the *previous* active display path,
+before the parallel level-shifter setup above replaced it) is kept fully
+intact but now dormant — see "Arduino display bridge" below. The
+separate direct Pico→LCD *serial* (3-wire) link remains parked, never
+having lit the display — see "Direct Pico→LCD serial link" below for
+that history and a note on what the parallel link's success implies
+about it.
 
 ## Hardware
 
@@ -52,35 +60,52 @@ a better level shifter. See "Direct Pico→LCD serial link" below.
   emulator needs far more RAM/flash than an Uno has (Uno: 2KB SRAM/32KB
   flash; Pico 2: 520KB SRAM, 2-4MB flash).
 - **Backlight:** intentionally disconnected — the real HP-41C has none.
-- **CS polarity:** the LCD module's own datasheet
+- **CS polarity — only relevant to the dormant serial link:** parallel
+  mode (the active path) has no `/CS` pin at all — the datasheet's
+  parallel pin table uses that same physical pin for `RS` instead. For
+  the serial link, the LCD module's own datasheet
   (`reference-material/datasheets/NHD-14432WG-BTFH-VT.pdf`) says "Active
   LOW Chip Select," but the real ST7920 controller datasheet
   (`reference-material/datasheets/ST7920.pdf`) confirms active-**HIGH**
   three separate ways (pin table, serial timing diagram, and its own
   8051 reference code) — a genuine conflict between the two vendor
-  documents, resolved in favor of the controller datasheet. `st7920.c`'s
-  `LCD_CS_ACTIVE_LOW` is `0` (active-high) to match.
+  documents, resolved in favor of the controller datasheet in
+  `lcd_bringup/`'s (dormant, serial-mode) `st7920.c`.
 - **GDRAM addressing:** vertical address 0-31 maps directly to y=0-31,
-  9 words/row, no bank-fold — confirmed both against a separately
-  hardware-validated Arduino reference implementation and, on the direct
-  serial link, via full logic-analyzer capture (every GDRAM write
-  decoded and cross-checked). `st7920_draw_frame()`/`st7920_clear()`
-  implement this.
+  9 words/row, no bank-fold — confirmed against a separately
+  hardware-validated Arduino reference implementation, via full
+  logic-analyzer capture on the (dormant) direct serial link (every
+  GDRAM write decoded and cross-checked), and again on the active direct
+  parallel link (checkerboard test pattern via `lcd_bringup/` rendered
+  correctly-aligned on real glass). `st7920_draw_frame()`/`st7920_clear()`
+  implement this; it's a controller-level fact, not bus-specific, so the
+  same addressing code carried over unchanged from serial to parallel.
 - **Level shifting:** required — `VDD` is 5V and the logic-high input
   threshold (0.7×VDD ≈ 3.5V) is above the Pico's ~3.3V GPIO output high.
-  The available level shifter (a RobotDyn "Logic Level Converter,
-  Bi-Direction," BSS138-based, auto-sensing — pinout in
-  `reference-material/datasheets/20171225012850PINOUT-LogLevel.pdf`) has
-  only 4 channels, enough for 3-wire serial (`/CS`/`SID`/`SCLK`) but not
-  8-bit parallel (10 signals: `RS`/`E`/`DB0-7`) — this is why the LCD is
-  jumpered to serial mode. If a parallel or actively-driven direct link
-  is ever revisited, a **74LVC245/74HCT245** (octal transceiver,
-  fixed `DIR`/`OE`) or **74HCT244** (octal buffer, inherently
-  unidirectional) is recommended over another passive auto-sensing
-  shifter — every signal in this design is one-directional (`R/W` is
-  permanently tied low), so an actively push-pull-driven chip removes
-  the rise-time question entirely. Two chips are needed for parallel's
-  10 signals (8 channels/chip).
+  10 signals need shifting for the active parallel link (`RS`/`E`/
+  `DB0-7`) — one 4-channel board isn't enough (that's what limited the
+  LCD to serial mode for a while), so three identical 4-channel
+  bidirectional boards (BSS138-based, auto-sensing — the same type
+  described in SparkFun's "Bi-Directional Logic Level Converter Hookup
+  Guide"; a RobotDyn "Logic Level Converter, Bi-Direction" board's pinout
+  is in `reference-material/datasheets/20171225012850PINOUT-LogLevel.pdf`
+  for reference) are used instead, 12 channels total with 2 spare.
+  `R/W` is permanently tied straight to GND (never driven — a
+  write-only design, no busy-flag reads) and needs no shifter channel at
+  all, since it's a constant 0V signal on both voltage domains.
+  Confirmed working on real hardware: `lcd_bringup/`'s solid-fill and
+  checkerboard test patterns rendered correctly, then the full ROM's
+  `MEMORY LOST` cold-start screen and live keypress-driven redraws all
+  confirmed on the physical glass — no actively-driven chip
+  (74LVC245/etc., previously recommended below for this exact scenario)
+  turned out to be necessary; passive auto-sensing shifters work fine
+  here, at least at this bus's clock speed. Notably, an *earlier*
+  attempt at the 3-wire serial link with a single board of this exact
+  same shifter type never lit the display at all — since swapping to
+  parallel with more of the identical shifter type immediately worked,
+  the shifter hardware itself was likely never that attempt's actual
+  problem. See "Direct Pico→LCD serial link" below, left parked rather
+  than re-investigated now that parallel works.
 - `firmware/pins.h` has the full pin-by-pin wiring table (LCD, level
   shifter, Arduino UART link, Pico power pins) — confirm/edit against
   actual wiring before flashing; the exact GPIO assignments are not
@@ -391,18 +416,66 @@ Usage: `python3 tools/hp41_keyboard_gui.py [--port /dev/cu.usbmodemXXXX]`
 (auto-detects the Pico's port if omitted, excluding anything that looks
 like the Arduino display bridge). Needs `pyserial` and `Pillow`.
 
-## Arduino display bridge — the active display path
+## Direct Pico→LCD parallel link — the active display path
+
+```
+Pico 2 (Nut CPU emulator)  --8-bit parallel, via 3x level shifter boards-->  LCD
+```
+
+The Pico drives the LCD's 8-bit parallel bus (`RS`/`E`/`DB0-7`) directly
+— no second board in the loop. This replaced the Arduino bridge below
+once three 4-channel level shifter boards were on hand (one board only
+covers the 3-wire serial link's 3 signals, not parallel's 10) — see
+"Hardware"'s level-shifting note above for the shifter details and
+`pins.h` for the exact GPIO/board/channel wiring table. **Confirmed
+working end-to-end** on real hardware: `lcd_bringup/`'s solid-fill and
+checkerboard test patterns rendered correctly through the new wiring
+before the full firmware was ever flashed (isolating the bus/wiring
+question from the ROM/emulator stack entirely), and the full firmware
+then showed a correct `MEMORY LOST` cold-start screen plus live
+keypress-driven redraws.
+
+- **Pico side** (`firmware/st7920.c`/`.h`): `st7920_init()` configures
+  `RS`/`E`/`DB0-7` as GPIO outputs and runs the ST7920 power-on command
+  sequence (unchanged from the previously-dormant serial-mode version of
+  this file — the command set and its datasheet-driven timing are
+  controller-level facts, not bus-specific). `st7920_draw_frame()`
+  writes a full framebuffer to GDRAM; `main.c` calls it directly from
+  the main loop's `fdsp`-triggered render block, replacing the old
+  Arduino-bridge send call — no framing/pacing logic is needed here (no
+  second, independently-clocked board's receive timing to coordinate
+  with, unlike the Arduino path below).
+- Byte transport (`write_byte()` in `st7920.c`): sets `RS` + the 8 data
+  lines, raises `E`, waits briefly, then drops `E` — the datasheet's own
+  pin table says `E` is **falling-edge triggered**, and its 8051
+  reference code (`Wcom()`/`Wdata()`) confirms the same sequence
+  bit-for-bit. `R/W` is never touched from software — it's hardwired to
+  GND (see "Hardware" above).
+- `lcd_bringup/` (see "Directory map" below) carries the same driver
+  logic and was used to validate the new wiring in isolation before
+  touching the main firmware - kept in the repo for reuse if the wiring
+  or shifter setup ever changes again.
+
+## Arduino display bridge — dormant, kept as a fallback
 
 ```
 Pico 2 (Nut CPU emulator)  --UART, 9600 baud-->  Arduino Uno  --8-bit parallel-->  LCD
 ```
 
-The direct Pico→LCD serial link (see below) never produced visible
-output on real hardware despite an exhaustively verified-correct
-protocol, so display output is currently routed through an Arduino Uno
-already independently validated against this exact LCD panel in
-parallel mode. This is the live path — **confirmed working end-to-end**
-on real hardware.
+This *was* the active display path (before the direct parallel link
+above replaced it): the direct Pico→LCD *serial* link (see "Direct
+Pico→LCD serial link" below) never produced visible output on real
+hardware despite an exhaustively verified-correct protocol, so display
+output was routed through an Arduino Uno already independently validated
+against this exact LCD panel in parallel mode, as an interim measure.
+Once three level shifter boards made a direct parallel link possible, it
+replaced this path outright. This section, `hp41_arduino_bridge.h`/`.c`,
+and the Arduino sketch are all kept fully intact and unmodified — not
+deleted — in case the direct link ever needs to be bypassed again;
+`main.c` just doesn't call into it right now (its calls are commented
+out at the same marked spots, mirroring how the direct-drive path used
+to be the commented-out one). Confirmed working end-to-end on real
+hardware in its own right, while it was the active path.
 
 - **Pico side** (`firmware/hp41_arduino_bridge.h`/`.c`):
   `hp41_arduino_bridge_init()` sets up UART0 on GP0/GP1 (the same
@@ -472,18 +545,21 @@ certainty.
   (CLX/backspace produces 4 rapid updates instead of 3, and disabling
   interrupts for the whole draw made *reception* impossible rather than
   just unreliable during a burst) was fixed by pacing sends from the
-  Pico side instead: `MIN_ARDUINO_SEND_INTERVAL_MS` (180ms, in
-  `main.c`) enforces a minimum gap between sends. Note the gap must
+  Pico side instead: `MIN_ARDUINO_SEND_INTERVAL_MS` (180ms) enforced a
+  minimum gap between sends, in `main.c` while this path was active (the
+  constant has since been removed now that the direct parallel link
+  doesn't need it — recoverable from git history). Note the gap had to
   account for `uart_write_blocking()` only blocking until bytes are
   queued into the UART hardware FIFO, not until they've finished
   physically transmitting (~42ms for this payload size at 9600 baud) —
-  the interval needs to cover that transmission tail plus the Arduino's
+  the interval needed to cover that transmission tail plus the Arduino's
   draw time.
 - This entire class of bug (a receive-while-drawing rate mismatch
-  between two independently-clocked boards) is specific to the
-  two-board architecture and shouldn't recur if the direct Pico→LCD link
-  ever replaces this bridge — a single-chip path has no second board's
-  asynchronous serial reception competing for the same write timing.
+  between two independently-clocked boards) was specific to the
+  two-board architecture and, as predicted, hasn't recurred with the
+  direct Pico→LCD parallel link now in use — a single-chip path has no
+  second board's asynchronous serial reception competing for the same
+  write timing.
 
 **Tooling for this path:**
 - `arduino-cli` (`brew install arduino-cli`, `arduino:avr` core):
@@ -506,13 +582,27 @@ certainty.
   (`lsof /dev/tty.usbmodem*`, `screen -ls`) — a leftover process can
   silently block a new connection attempt with no error.
 
-## Direct Pico→LCD serial link — implemented, protocol-verified, not yet lit up
+## Direct Pico→LCD serial link — implemented, protocol-verified, still never lit up
+
+**Superseded by the direct *parallel* link above, which is the active
+display path now.** This section is kept for its own sake (a real,
+unresolved investigation) but isn't blocking anything anymore, and
+hasn't been revisited since parallel started working. One relevant new
+data point: the parallel link's three level shifter boards are the
+*same type* (BSS138-based, auto-sensing) as the single board this serial
+attempt used, and parallel worked immediately. That makes it unlikely
+the shifter hardware itself was ever this attempt's problem — something
+more specific to the serial protocol, wiring, or CS polarity guess (see
+below) is the more likely remaining suspect, if this is ever picked back
+up.
 
 A direct 3-wire serial connection from the Pico to the LCD (bypassing
-the Arduino) is fully implemented (`firmware/st7920.c`/`.h`,
-`firmware/pins.h`) but currently dormant — `main.c` calls into the
-Arduino bridge instead; the direct-drive calls are commented out, not
-deleted, so this can resume without rewriting anything.
+the Arduino) was fully implemented (`firmware/st7920.c`/`.h`,
+`firmware/pins.h`, and `lcd_bringup/`'s copies of the same) but never
+produced visible output. All of those files have since been overwritten
+in-place with the parallel version now that parallel is the
+active/validated approach — recover the serial version from git history
+if this investigation is ever resumed.
 
 **What's been proven correct**, without the display ever lighting up:
 - CS polarity, sync-byte/nibble framing, and GDRAM addressing all match
@@ -541,10 +631,12 @@ protocol/timing/wiring, all of which is already proven correct as far as
 software alone can show. An actively-driven level shifter (see
 "Hardware" above) would also settle the question directly.
 
-`lcd_bringup/` stays in the repo for this purpose: interactive over USB
-serial at 115200 baud, auto-cycles test patterns or accepts single-char
-commands (`i`=reinit, `c`=clear, `f`=solid fill, `k`=checkerboard,
-`p`=toggle CS polarity live, `a`=toggle auto-cycle).
+`lcd_bringup/`'s serial-mode commands (including `p`=toggle CS polarity
+live, which doesn't apply to parallel mode at all — there's no `/CS`
+pin) are gone now that the project has been repurposed for parallel
+bring-up (see "Direct Pico→LCD parallel link" above for its current
+command set) - recover the serial version from git history if this
+investigation is ever resumed.
 
 ## Firmware — `firmware/`: Pico SDK project
 
@@ -552,31 +644,37 @@ commands (`i`=reinit, `c`=clear, `f`=solid fill, `k`=checkerboard,
   `PICO_BOARD` must be set **before** `project()` — the SDK resolves
   board/platform during that call, so setting it after silently falls
   back to `PICO_PLATFORM=rp2040`/board `pico`. USB stdio is enabled
-  (`pico_enable_stdio_usb`); UART stdio is disabled (UART0 is used for
-  the Arduino bridge instead).
-- **`pins.h`** — GPIO assignments for both the dormant direct-drive LCD
-  path and the active Arduino-bridge path; full wiring table in its
-  header comment.
-- **`st7920.c`/`.h`** — low-level 3-wire serial ST7920 driver. No
-  busy-flag polling (never reads; `R/W` is fixed 0), fixed delays
-  instead (72us normal, 1.6ms after Clear, plus the datasheet power-on
-  timing above). Currently dormant (see above).
+  (`pico_enable_stdio_usb`); UART stdio is disabled (`hardware_uart` is
+  still linked and `hp41_arduino_bridge.c` still builds, for the dormant
+  Arduino-bridge fallback, but nothing currently calls into it).
+- **`pins.h`** — GPIO assignments for both the active direct-drive
+  parallel LCD path and the dormant Arduino-bridge path; full wiring
+  table in its header comment.
+- **`st7920.c`/`.h`** — low-level 8-bit parallel ST7920 driver. No
+  busy-flag polling (never reads; `R/W` is fixed low, tied directly to
+  GND in hardware rather than driven from a GPIO), fixed delays instead
+  (72us normal, 1.6ms after Clear, plus the datasheet power-on timing
+  above). The active display path (see "Direct Pico→LCD parallel link"
+  above).
 - **`bitmaps.c`/`.h`** — three runtime-generated test patterns
   (all-on, checkerboard, 4px border), unused in normal operation but
   available as a hardware-debugging aid.
-- **`hp41_arduino_bridge.h`/`.c`** — the active display path (see above).
+- **`hp41_arduino_bridge.h`/`.c`** — the dormant fallback display path
+  (see "Arduino display bridge" above).
 - **`hp41_display_bridge.h`/`.c`**, **`hp41_key_bridge.h`/`.c`**,
   **`hp41_key_hold_bridge.h`/`.c`** — see their sections above.
 - **`main.c`** — full system integration. `stdio_init_all()`, then
-  `hp41_arduino_bridge_init()`, then `nut_boot()`. Main loop per
+  `st7920_init()`/`st7920_clear()`, then `nut_boot()`. Main loop per
   iteration: drain pending USB bytes into the key bridge (always, even
   asleep, since a key is what wakes it); if asleep and a key is now
   queued, reset `regPC=0`/`flagKey=0` and wake; otherwise if asleep,
   skip `executeNUT()` entirely; else run `executeNUT(1000)` (single-step
   instead, sustaining the key-hold state, if a hold is active), throttle
-  via `sleep_us()`; on `fdsp`, compute the framebuffer, checksum it,
-  send it over the Arduino bridge (rate-limited via
-  `MIN_ARDUINO_SEND_INTERVAL_MS`); on `POWOFF`, go to sleep; once/second,
+  via `sleep_us()`; on `fdsp`, compute the framebuffer, checksum it, and
+  push it straight to the LCD via `st7920_draw_frame()` (no pacing
+  needed — unlike the old Arduino path, there's no second,
+  independently-clocked board's receive/draw timing to coordinate
+  with); on `POWOFF`, go to sleep; once/second,
   print a heartbeat (`PC`/`cptinstr`/`lgkeybuf`/`flagKey`/`regK`/`ret`/
   `asleep`) so a genuine hang is distinguishable from normal sleep. Debug
   logging throughout is lightweight (checksum + heartbeat + byte echo) —
@@ -696,8 +794,9 @@ for research/provenance material nothing in the build reads anymore.
 
 ```
 Arduino NHD14432/ NHD14432_POC/ (original, hardware-validated, untouched
-                 snapshot) + NHD14432_DisplayBridge/ (the active display
-                 bridge sketch — see "Arduino display bridge" above)
+                 snapshot) + NHD14432_DisplayBridge/ (the now-dormant
+                 display bridge sketch - see "Arduino display bridge"
+                 above)
 emu41gcc/        Nut CPU emulation core - git submodule, not vendored
                  files (see "The Nut CPU core" above); requires
                  --recurse-submodules or `git submodule update --init`
@@ -705,8 +804,10 @@ firmware/        Pico SDK project — display bring-up + Nut core wired
                  into the build (emu41gcc_compat/ has the compat shims)
 lcd_bringup/     Standalone Pico SDK project (own CMakeLists.txt, no
                  dependency on emu41gcc/ROM/Arduino) - isolated LCD
-                 bring-up testing. See "Direct Pico→LCD serial link"
-                 above - kept for reuse if that path is revisited.
+                 bring-up testing, currently holding the parallel-mode
+                 driver. See "Direct Pico→LCD parallel link" above -
+                 kept for reuse if the wiring/shifter setup changes
+                 again.
 font-tables/     HP-41 font/segment table: generated tables
                  (hp41_display_tables.c/h) + the three JSON sources
                  gen_display_tables.py reads. Original .ai/.pdf source
@@ -762,9 +863,11 @@ DEVLOG.md        Session-by-session development history (gitignored,
 ## Known unknowns / next steps
 
 - **Direct Pico→LCD serial link**: protocol/timing fully verified, still
-  hasn't lit up the display — needs a multimeter/scope check of actual
-  voltage levels at the LCD (not yet done), ideally with an
-  actively-driven level shifter. See that section above.
+  never lit up the display — superseded by the working direct *parallel*
+  link, so no longer blocking anything; low priority to revisit. See
+  that section above for the multimeter/scope check that was never done,
+  and the note on what the parallel link's success implies about the
+  level shifter not being the likely culprit.
 - **Auto power-off after every keypress**: confirmed real/intentional
   ROM behavior (matches real HP-41 timeout logic, just scaled to trigger
   sooner in this environment) — not a bug. The separate "screen goes
@@ -779,9 +882,12 @@ DEVLOG.md        Session-by-session development history (gitignored,
   150ms GUI-side tap/hold threshold to absorb round-trip latency). Not
   yet independently reconfirmed on hardware that quick taps never
   flash the hold-label in practice — worth a fresh check.
-- **`firmware/pins.h` GPIO assignments** need confirmation against
-  actual wiring — current values are placeholders, not a known-working
-  pinout carried over from prior hardware.
+- **`firmware/pins.h`'s active (parallel) GPIO assignments** are now
+  confirmed working against real hardware (see "Direct Pico→LCD parallel
+  link" above). The dormant Arduino-bridge pins (`PIN_ARDUINO_UART_TX/RX`)
+  are unverified in the *current* physical wiring, since GP0/GP1 are now
+  doing RS/E duty for the direct link instead — reconnecting that
+  fallback would need rewiring, not just a firmware swap.
 - **Punctuation pixel mapping** (dot_top/dot_bottom/comma_tail) hasn't
   been cross-checked against a rendered real colon/period/comma the way
   the printable characters were.
