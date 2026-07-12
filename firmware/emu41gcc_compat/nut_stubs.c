@@ -13,6 +13,13 @@
  * GLOBAL-declared state (clock_reg, hpil_reg, etc.) - exactly one
  * translation unit needs to do that, same pattern emu41gcc's own
  * ignore/timer.c and ignore/hpil.c use.
+ *
+ * Power of 10, Rule 5 note: these bodies deliberately carry no
+ * assertions. Each one's entire behavior is "discard the parameter,
+ * return a fixed constant" - there is no precondition to check and no
+ * postcondition beyond what the return statement already states, so an
+ * assertion here would just restate the line above it rather than
+ * catch a real anomaly.
  */
 
 #define GLOBAL

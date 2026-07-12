@@ -4,11 +4,14 @@
  * documented cold-start values.
  */
 
+#include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
+
 #define GLOBAL extern
 #include "nutcpu.h"
 
 #include "nut_rom.h"
-#include <stdint.h>
 
 /* rom_images.c has no header of its own (rom_to_c.py only emits the .c
  * file) - declared extern here instead. If the ROM set wired in ever
@@ -32,6 +35,8 @@ void nut_boot(void)
   typmod[0] = 1;
   typmod[1] = 1;
   typmod[2] = 1;
+  assert(tabpage[0] != NULL && tabpage[1] != NULL && tabpage[2] != NULL);
+  assert(typmod[0] == 1 && typmod[1] == 1 && typmod[2] == 1);
 
   /* Cold-start CPU state. Mirrors the fields emu41gcc's own
    * loader.c:initcpu() sets that actually matter for a fresh boot -
@@ -42,4 +47,6 @@ void nut_boot(void)
   regST = 0x0800;    /* stack lift enabled */
   Carry = 1;         /* coldstart flag - checked by the ROM on power-up */
   mode_printer = -1; /* no HP82143 printer plugged in */
+  assert(regPC == 0 && regST == 0x0800);
+  assert(Carry == 1 && mode_printer == -1);
 }
