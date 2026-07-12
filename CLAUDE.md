@@ -43,6 +43,117 @@ having lit the display — see "Direct Pico→LCD serial link" below for
 that history and a note on what the parallel link's success implies
 about it.
 
+## Coding standard: NASA/JPL "Power of 10" (new code, from commit `0b65fa1` onward)
+
+Any code written for this project's own original source **after commit
+`0b65fa1`** should comply with NASA/JPL's "Power of 10" rules for
+safety-critical code as closely as this project's realities allow. The
+goal is long-term legibility as the codebase grows, not certification —
+apply these as strong defaults, not absolute law; where a rule is
+genuinely impractical here, the exception should be as explicit and
+justified as the departures already documented elsewhere in this file
+(e.g. the CS-polarity/GDRAM-addressing notes above).
+
+**Reference (pinned to the exact revision this policy is based on):**
+- C: https://github.com/Vhivi/Powerof10-NASA/blob/29f6f3975bba9c6d6430f8638d8d561786b04c26/rules/Powerof10-C.md
+- Python: https://github.com/Vhivi/Powerof10-NASA/blob/29f6f3975bba9c6d6430f8638d8d561786b04c26/rules/Powerof10-Python.md
+
+**Scope — applies to:** this project's own original C (`firmware/*.c/.h`
+except `emu41gcc_compat/` interop shims where noted below,
+`lcd_bringup/*.c/.h`, `tests/*.c`, `tools/*.c`) and Python
+(`tools/*.py`, `font-tables/gen_display_tables.py`, `roms/*.py`), plus
+any future edits to `Arduino NHD14432/NHD14432_DisplayBridge/*.ino`
+(project-authored, C-like — apply the C rules there).
+
+**Does NOT apply to:**
+- `emu41gcc/` — a git submodule and a hard "never edit" black box (see
+  "The Nut CPU core" above); there's no such thing as "new code" there
+  from this project's side.
+- `pico-sdk/` — an external dependency, not project code.
+- `Arduino NHD14432/NHD14432_POC/` — explicitly preserved as an
+  untouched, hardware-validated snapshot (see "Directory map"); it isn't
+  meant to be edited going forward either.
+- Code already in the repo as of `0b65fa1` — not retroactively rewritten
+  for this. Only touch existing code for this reason if it's already
+  being substantially rewritten for some other reason anyway.
+
+**The 10 rules, applied to this codebase specifically:**
+
+1. **Simple control flow — no `goto`/`setjmp`/`longjmp`, no recursion.**
+   Already the de facto style here (state machines like `dokey()`-driving
+   code and the key/hold bridges are loop-based, not recursive). Keep it
+   that way — e.g. a future GDRAM/font-table walk should be an explicit
+   loop, not recursive descent.
+2. **Every loop needs a provably fixed upper bound.** Most loops here
+   already iterate over fixed-size hardware constants (`LCD_HEIGHT_PX`,
+   `LCD_BYTES_PER_ROW`, a `keybuffer[8]` cap) — good fit, keep bounding
+   new loops the same way. The one existing pattern that's *not*
+   trivially bounded is `main.c`'s USB-byte-drain loop
+   (`while ((c = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT)`), which
+   only terminates because the USB FIFO itself is finite, not because
+   the loop counts anything — new code with a similar "drain until
+   empty" shape should add an explicit max-iterations cap per Rule 2's
+   own guidance for variable-bound loops, rather than relying on an
+   external buffer's size as an implicit bound.
+3. **No dynamic allocation after init.** Already the norm — display/key
+   buffers are static/global arrays (`framebuf[LCD_FB_SIZE]`,
+   `keybuffer[]`), never `malloc()`'d. Keep new buffers static or
+   stack-allocated with a fixed compile-time size.
+4. **~60 lines per function.** Some existing functions (`main()`'s loop
+   body, `hp41_key_bridge_feed_byte()`'s state machine) already run
+   longer than this and aren't being split up retroactively, but new
+   functions should target this, splitting out logical sub-steps (the
+   Arduino sketch's `computeFramebufferFromState()`/`pollPicoLink()`
+   split is a reasonable model).
+5. **≥2 assertions per function, side-effect-free, explicit recovery on
+   failure.** Use `assert()` (`<assert.h>`, works fine under the Pico
+   SDK/newlib) for pre/postconditions and invariants in new C code;
+   Python's `assert` for the tooling scripts. "Explicit recovery action"
+   on this project's bare-metal firmware realistically means what
+   `main.c` already does for invalid opcodes: report clearly over the
+   debug UART, then halt in a tight loop rather than silently continuing
+   into undefined behavior — there's no OS/exception handler to hand an
+   error to. Follow that existing pattern for new hard-invariant
+   failures rather than inventing a new one.
+6. **Smallest possible variable scope.** General good practice, applies
+   as-is. Note `nut_globals.c`'s file-scope globals
+   (`tabpage`/`espaceRAM`/etc.) are a required exception, not a
+   violation to fix — they exist purely because `emu41gcc/nutcpu.h`'s
+   vendored `GLOBAL` macro pattern demands real storage somewhere, and
+   that file's entire job is providing it (see "The Nut CPU core"
+   above). New project code should still default to the narrowest scope
+   that works.
+7. **Check every non-void return value; validate every parameter.**
+   Worth being deliberate about here specifically because several
+   existing bridge functions (`hp41_key_bridge_feed_byte()`,
+   `hp41_display_compute_framebuffer()`) are `void` by design and can't
+   surface an error — new functions that *can* fail should return a
+   status the caller actually checks, not just log and continue.
+8. **Preprocessor limited to header inclusion + simple macros; minimize
+   conditional compilation.** `firmware/emu41gcc_compat/`'s force-includes
+   and `-fcommon`/`-include` CMake flags are a justified, narrowly-scoped
+   exception — they exist solely to compile vendored DOS-era C
+   unmodified (see "Firmware" below), not as a pattern to extend
+   elsewhere. New project code shouldn't add new conditional-compilation
+   directives or macro-heavy tricks beyond that existing, contained
+   exception.
+9. **Restrict pointers to one level of dereference; no function
+   pointers.** This project's own driver/bridge code (`st7920.c`,
+   `hp41_*_bridge.c`) already stays at one level (`const uint8_t *fb`,
+   simple array pointers) with zero function pointers — keep it that
+   way. (`emu41gcc`'s internal opcode dispatch may use deeper
+   patterns internally; that's vendored and out of scope, per "Does NOT
+   apply to" above.)
+10. **Compile with the most pedantic warnings enabled, zero warnings;
+    static analysis.** Not yet wired into `firmware/CMakeLists.txt` for
+    this project's own sources (`-Wall -Wextra -Wpedantic` scoped to the
+    non-vendored `.c` files, alongside a Python linter like `ruff` for
+    the tooling scripts) — worth doing as a deliberate follow-up if
+    wanted, since scoping it only to project-owned files avoids fighting
+    vendored code that was never written to be warning-clean. Ask before
+    assuming this should happen automatically, since enabling `-Werror`
+    could surface a real backlog of warnings in existing files.
+
 ## Hardware
 
 - **Display:** Newhaven NHD-14432WG-BTFH-VT, ST7920 controller, 144x32
