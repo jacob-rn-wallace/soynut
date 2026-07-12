@@ -1,6 +1,12 @@
 [tool.ruff]
 line-length = 100
 target-version = "py39"
+# NHD14432_POC/ is an explicitly preserved, untouched hardware-validated
+# snapshot (CLAUDE.md's "Does NOT apply to" list) - its convert_images.py
+# is a pre-Power-of-10 duplicate of NHD14432_DisplayBridge/'s copy (the
+# one this project's own Power of 10 rewrite actually applies to), not
+# code this project holds to this standard.
+extend-exclude = ["Arduino NHD14432/NHD14432_POC"]
 
 [tool.ruff.lint]
 # Power of 10 (Python adaptation), Rule 10: static analysis with zero
@@ -26,3 +32,8 @@ python_version = "3.9"
 disallow_untyped_defs = true
 warn_return_any = true
 warn_unused_ignores = true
+exclude = [
+    "^Arduino NHD14432/NHD14432_POC/",  # see [tool.ruff]'s extend-exclude comment above
+    "^pico-sdk/",     # external dependency (gitignored, not project code) - not ours to hold to this
+    "^toolchain/",    # extracted ARM toolchain (gitignored) - binary/support files, not Python we own
+]
