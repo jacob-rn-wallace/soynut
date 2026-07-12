@@ -1,4 +1,4 @@
-toolchain/
+toolchain
 build/
 .claude/settings.local.json
 reference-material/
@@ -13,7 +13,7 @@ __pycache__/
 # ~675MB, versioned, and meant to live outside any one project's repo
 # (PICO_SDK_PATH is exactly for this). See CLAUDE.md for how to fetch
 # the matching version.
-pico-sdk/
+pico-sdk
 
 # Copyrighted HP-41 ROM firmware dumps and the generated C source that
 # re-encodes them - not ours to redistribute. Each user must supply
