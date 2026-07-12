@@ -1,4 +1,5 @@
 #include "pico/stdlib.h"
+#include <assert.h>
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -19,7 +20,12 @@
 // clocks aren't synchronized with each other (each just counts from its
 // own power-on/reset), so this only gives useful correlation if both are
 // power-cycled at roughly the same moment.
+/* Power of 10, Rule 5 note: fmt!=NULL is the only real precondition
+ * this function has - its whole job is "prefix a timestamp, forward
+ * the rest to vprintf" - so a second assertion here would just restate
+ * that forwarding rather than check anything new. */
 static void dbg(const char *fmt, ...) {
+    assert(fmt != NULL);
     printf("[%lums] ", (unsigned long)to_ms_since_boot(get_absolute_time()));
     va_list args;
     va_start(args, fmt);
@@ -64,16 +70,31 @@ static void dbg(const char *fmt, ...) {
 // even looked at until that whole batch completed, artificially
 // sustaining every tap - however fast - past the ROM's own blink
 // threshold (see CLAUDE.md's "Real key hold-duration" section).
+// Power of 10, Rule 2: CLAUDE.md flags this loop by name as the one
+// existing pattern that isn't trivially bounded - it only terminates
+// because the USB FIFO is finite, not because anything here counts.
+// MAX_BYTES_PER_DRAIN adds an explicit, provable cap (well above any
+// realistic single burst - keybuffer[] itself caps useful input at 8
+// pending keys) as a defensive backstop, without changing normal
+// behavior at all: a real USB FIFO drains in well under this many
+// iterations every time.
+#define MAX_BYTES_PER_DRAIN 256
+
 static void drain_usb_bytes(void) {
     int c;
-    while ((c = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT) {
+    int drained = 0;
+    while (drained < MAX_BYTES_PER_DRAIN
+           && (c = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT) {
         // TEMPORARY: confirms bytes are actually arriving over USB and
         // shows the key bridge's effect on keybuffer[] directly.
         dbg("soynut: got byte 0x%02X ('%c'), lgkeybuf %d -> ",
                (unsigned)c, (c >= 32 && c < 127) ? c : '.', lgkeybuf);
         hp41_key_bridge_feed_byte(c);
         printf("%d\n", lgkeybuf);
+        drained++;
     }
+    assert(drained >= 0 && drained <= MAX_BYTES_PER_DRAIN);
+    assert(lgkeybuf >= 0 && lgkeybuf <= 8);
 }
 
 int main(void) {
@@ -99,6 +120,7 @@ int main(void) {
     // hp41_arduino_bridge_init(); // dormant - see pins.h "Arduino display bridge" note
     dbg("soynut: nut_boot()...\n");
     nut_boot();
+    assert(regPC == 0); /* nut_boot()'s documented cold-start value */
     dbg("soynut: entering main loop\n");
 
     static uint8_t framebuf[LCD_FB_SIZE];
@@ -206,12 +228,14 @@ int main(void) {
         } else {
             ret = executeNUT(1000);
         }
+        assert(ret >= 0 && ret <= 3); /* executeNUT()'s only documented return values */
 
         // Throttle to approximate real Nut CPU speed - see
         // TARGET_INSTRUCTIONS_PER_SEC's comment above. executeNUT() may
         // have run fewer than 1000 instructions (stops early on fdsp/ret),
         // so pace based on how many it actually ran, not the ceiling.
         int instructions_ran = cptinstr - cptinstr_before;
+        assert(instructions_ran >= 0);
         if (instructions_ran > 0) {
             sleep_us((instructions_ran * 1000000ULL) / TARGET_INSTRUCTIONS_PER_SEC);
         }
@@ -271,6 +295,12 @@ int main(void) {
             // once and halt rather than spin printing the same message
             // forever (regPC doesn't advance past the bad opcode).
             dbg("soynut: invalid opcode at PC=0x%04X, halting\n", regPC);
+            /* Power of 10, Rule 2/5: this intentionally-nonterminating
+             * halt loop is the "explicit recovery on failure" Rule 5
+             * calls for on bare-metal firmware with no OS/exception
+             * handler to hand an error to - see DEVIATIONS.md's Rule 2
+             * entry, which covers this pattern alongside the outer
+             * while(true) above. */
             while (true) {
                 tight_loop_contents();
             }

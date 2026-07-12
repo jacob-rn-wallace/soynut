@@ -52,9 +52,11 @@ fixed, not added to this list.
 ## Rule 2 (every loop must have a fixed, provable upper bound)
 
 **Scope of the exception:** the top-level `while (true)` in
-`firmware/main.c` and `lcd_bringup/main.c`, and the Arduino sketches'
+`firmware/main.c` and `lcd_bringup/main.c`, the Arduino sketches'
 `loop()` functions (which the Arduino runtime itself calls forever —
-there's no way to "bound" that from inside the sketch).
+there's no way to "bound" that from inside the sketch), and the
+halt-on-fatal-error `while (true) { tight_loop_contents(); }` inside
+`firmware/main.c`'s invalid-opcode handler.
 
 **Why:** this is the exact case Rule 2's own text anticipates:
 "special cases exist for intentionally nonterminating iterations, which
@@ -62,12 +64,18 @@ should be provably unable to terminate." Firmware for a device with no
 concept of "exiting" needs exactly one genuinely unbounded loop at the
 top. The rule's actual concern — a loop that's *supposed* to terminate
 but might not, due to a bug — doesn't apply to a loop that was never
-meant to terminate in the first place.
+meant to terminate in the first place. The halt-on-fatal-error loop is
+the same case for a different reason: it's Rule 5's own "explicit
+recovery on failure" for a hard invariant violation on bare-metal
+firmware with no OS/exception handler to hand an error to (see
+`CLAUDE.md`'s Rule 5 discussion) — halting is the recovery action, so
+this loop is deliberately unbounded too.
 
 **Boundary:** every *other* loop in this codebase (the 12-cell display,
 the 8-slot `keybuffer[]`, the 128-entry `tabcode[]` table, etc.) must
 have a real, checkable fixed bound — this exception covers exactly the
-one designated top-level loop per entry point, nothing nested inside it.
+designated top-level loop per entry point and the halt-on-fatal-error
+idiom, nothing else nested inside either.
 
 ## Rule 9 (no function pointers)
 
