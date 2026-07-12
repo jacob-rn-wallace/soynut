@@ -1,4 +1,5 @@
 #include "pico/stdlib.h"
+#include <assert.h>
 #include <stdio.h>
 
 #include "st7920.h"
@@ -31,6 +32,8 @@ static void print_help(void) {
 
 static void do_checkerboard(void) {
     static uint8_t fb[LCD_FB_SIZE];
+    assert(sizeof(fb) == LCD_FB_SIZE);
+    assert(LCD_BYTES_PER_ROW > 0);
     for (int y = 0; y < LCD_HEIGHT_PX; y++) {
         for (int x = 0; x < LCD_BYTES_PER_ROW; x++) {
             // 8x8 checkerboard, alternating by byte-column and row-group
@@ -41,6 +44,8 @@ static void do_checkerboard(void) {
 }
 
 static void run_command(int c) {
+    assert(c >= 0 && c <= 255); /* caller already filtered out PICO_ERROR_TIMEOUT */
+    assert(c != PICO_ERROR_TIMEOUT);
     switch (c) {
         case 'i':
             printf("lcd_bringup: re-running gpio_init + init sequence\n");
@@ -103,6 +108,7 @@ int main(void) {
         if (auto_cycle && now_ms - last_auto_ms >= 2000) {
             last_auto_ms = now_ms;
             auto_state = (auto_state + 1) % 3;
+            assert(auto_state >= 0 && auto_state < 3);
             switch (auto_state) {
                 case 0: printf("lcd_bringup: [auto] clear\n"); st7920_fill(0x00); break;
                 case 1: printf("lcd_bringup: [auto] solid\n"); st7920_fill(0xFF); break;

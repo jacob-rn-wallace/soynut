@@ -30,8 +30,14 @@ add_executable(lcd_bringup
 # directly to this target under the hood, and target_compile_options
 # would apply to those vendored sources too (confirmed: it fails on
 # pico-sdk's own bootrom.c under -Wpedantic, which isn't ours to fix).
+#
+# -UNDEBUG is for Rule 5: the Pico SDK's default build type is Release,
+# which sets -DNDEBUG - and <assert.h> compiles every assert() to
+# nothing under NDEBUG, silently defeating this pass's assertions (see
+# ../firmware/CMakeLists.txt's identical note, where an ARM build first
+# surfaced this).
 set_property(SOURCE main.c st7920.c APPEND PROPERTY COMPILE_OPTIONS
-        -Wall -Wextra -Wpedantic -Werror
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG
 )
 
 target_link_libraries(lcd_bringup

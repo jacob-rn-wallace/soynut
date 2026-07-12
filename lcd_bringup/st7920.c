@@ -1,6 +1,8 @@
 #include "st7920.h"
 #include "pins.h"
 
+#include <assert.h>
+
 #include "pico/stdlib.h"
 
 // --- Low-level 8-bit parallel bus ---------------------------------------
@@ -30,6 +32,11 @@ static const uint DATA_PINS[8] = {
 #define BUS_DELAY_US 2 // generous vs. the datasheet's ns-scale address/data setup and E pulse-width figures
 
 static void write_byte(bool is_data, uint8_t value, uint32_t delay_us) {
+    /* E must already be low when a new transaction begins - see
+     * ../firmware/st7920.c's identical note; the two files share this
+     * bus-transport design. */
+    assert(gpio_get(PIN_LCD_E) == 0);
+
     gpio_put(PIN_LCD_RS, is_data ? 1 : 0);
     for (int i = 0; i < 8; i++) {
         gpio_put(DATA_PINS[i], (value >> i) & 1);
@@ -40,6 +47,7 @@ static void write_byte(bool is_data, uint8_t value, uint32_t delay_us) {
     busy_wait_us(BUS_DELAY_US); // E pulse width / data setup before E falls
     gpio_put(PIN_LCD_E, 0);     // falling edge - this is what actually latches the byte
     busy_wait_us(BUS_DELAY_US); // data hold time after E falls
+    assert(gpio_get(PIN_LCD_E) == 0);
 
     busy_wait_us(delay_us);
 }
@@ -63,11 +71,14 @@ static inline void write_data(uint8_t data) {
 #define CMD_GDRAM_ADDR_BASE                0x80
 
 static void set_gdram_addr(uint8_t vertical, uint8_t horizontal) {
+    assert(vertical < LCD_HEIGHT_PX);
+    assert(horizontal <= 0x0F);
     write_cmd(CMD_GDRAM_ADDR_BASE | (vertical & 0x3F));
     write_cmd(CMD_GDRAM_ADDR_BASE | (horizontal & 0x0F));
 }
 
 void st7920_gpio_init(void) {
+    assert(sizeof(DATA_PINS) / sizeof(DATA_PINS[0]) == 8);
     gpio_init(PIN_LCD_RS);
     gpio_init(PIN_LCD_E);
     gpio_set_dir(PIN_LCD_RS, GPIO_OUT);
@@ -77,6 +88,7 @@ void st7920_gpio_init(void) {
         gpio_set_dir(DATA_PINS[i], GPIO_OUT);
     }
     gpio_put(PIN_LCD_E, 0);
+    assert(gpio_get(PIN_LCD_E) == 0);
 }
 
 void st7920_run_init_sequence(void) {
@@ -101,6 +113,8 @@ void st7920_run_init_sequence(void) {
 }
 
 void st7920_fill(uint8_t pattern) {
+    assert(LCD_BYTES_PER_ROW % 2 == 0); /* the write-two-bytes-at-a-time loop below assumes this */
+    assert(LCD_HEIGHT_PX > 0);
     for (uint8_t y = 0; y < LCD_HEIGHT_PX; y++) {
         set_gdram_addr(y, 0);
         for (uint8_t w = 0; w < LCD_BYTES_PER_ROW / 2; w++) {
@@ -116,6 +130,8 @@ void st7920_fill(uint8_t pattern) {
 // CLAUDE.md). Each row is 9 words (LCD_BYTES_PER_ROW/2), one contiguous
 // burst per row after a single address-set.
 void st7920_draw_frame(const uint8_t *fb) {
+    assert(fb != NULL);
+    assert(LCD_BYTES_PER_ROW % 2 == 0);
     for (int y = 0; y < LCD_HEIGHT_PX; y++) {
         const uint8_t *row = fb + (size_t)y * LCD_BYTES_PER_ROW;
 
