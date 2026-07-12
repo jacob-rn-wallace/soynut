@@ -19,13 +19,35 @@ this script's directory):
     python3 gen_display_tables.py --avr > hp41_display_tables_avr.h
 """
 import json
-import os
 import sys
+from pathlib import Path
+from typing import Any, TypedDict
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-FONT_TABLE_PATH = os.path.join(SCRIPT_DIR, "hp41_font_table.json")
-PIXEL_MAP_PATH = os.path.join(SCRIPT_DIR, "hp41_pixel_segment_map.json")
-ANNUNCIATOR_MAP_PATH = os.path.join(SCRIPT_DIR, "hp41_annunciator_pixel_map.json")
+JsonDict = dict[str, Any]
+Point = list[int]  # [x, y], as stored in the source JSON
+
+
+class DisplayTables(TypedDict):
+    """compute_tables()'s return shape - both emitters below consume
+    exactly this, computed once from the JSON sources.
+    """
+
+    cell_width_px: int
+    cell_height_px: int
+    char_segments: list[int]
+    blanked: list[int]
+    flat: list[Point]
+    offsets: list[int]
+    counts: list[int]
+    ann_bits: list[int]
+    ann_flat: list[Point]
+    ann_offsets: list[int]
+    ann_counts: list[int]
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+FONT_TABLE_PATH = SCRIPT_DIR / "hp41_font_table.json"
+PIXEL_MAP_PATH = SCRIPT_DIR / "hp41_pixel_segment_map.json"
+ANNUNCIATOR_MAP_PATH = SCRIPT_DIR / "hp41_annunciator_pixel_map.json"
 
 # Must match emu41gcc/display.c's ann_to_buf() bit order (MSB first).
 ANNUNCIATOR_ORDER = [
@@ -43,43 +65,57 @@ SEGMENT_BIT_ORDER = [
 ]
 PUNCT_SEGMENTS = ["dot_top", "dot_bottom", "comma_tail"]
 ALL_SEGMENTS = SEGMENT_BIT_ORDER + PUNCT_SEGMENTS  # 17 total
+SEGMENT_BIT_COUNT = len(SEGMENT_BIT_ORDER)  # 14
+
+# Codes 0-31 are flagged unreliable (garbage extraction) in
+# hp41_font_table.json / CLAUDE.md. But the "all segments on" bit string
+# turns out to be the extraction tool's own failure sentinel, not a real
+# character - see _compute_char_segments()'s use of it below.
+FAILURE_SENTINEL = "1" * SEGMENT_BIT_COUNT
+RELIABLE_CODE_START = 32  # codes below this are known-unreliable extractions
 
 
-def compute_tables():
-    """Parse the 3 JSON sources and return every derived table both
-    emitters need, so the plain-C and AVR/PROGMEM outputs are guaranteed
-    to be built from identical data - only how it's *printed* differs.
+def check(condition: bool, message: str) -> None:
+    """Power of 10 (Python adaptation), Rule 5 assertion helper.
+
+    Unlike a bare `assert` statement, this is never compiled out under
+    `-O`/`-OO` - see ../DEVIATIONS.md's implementation note on why this
+    project uses `check()` instead of `assert` for anything Rule 5
+    actually requires.
     """
-    with open(FONT_TABLE_PATH) as f:
+    if not condition:
+        raise AssertionError(message)
+
+
+def _load_json_sources() -> tuple[JsonDict, JsonDict, JsonDict]:
+    """Reads and parses the three JSON source files. Pure I/O + parse,
+    no validation - that's compute_tables()'s job once all three are in
+    hand and can be cross-checked against each other.
+    """
+    with FONT_TABLE_PATH.open() as f:
         font_table = json.load(f)
-    with open(PIXEL_MAP_PATH) as f:
+    with PIXEL_MAP_PATH.open() as f:
         pixel_map = json.load(f)
-    with open(ANNUNCIATOR_MAP_PATH) as f:
+    with ANNUNCIATOR_MAP_PATH.open() as f:
         annunciator_map = json.load(f)
+    return font_table, pixel_map, annunciator_map
 
-    assert pixel_map["segment_bit_order_ref"] == SEGMENT_BIT_ORDER, \
-        "hp41_pixel_segment_map.json's segment order no longer matches " \
-        "this script - update SEGMENT_BIT_ORDER"
-    segments = pixel_map["segments"]
-    assert set(segments.keys()) == set(ALL_SEGMENTS), \
-        f"unexpected segment set in pixel map: {sorted(segments.keys())}"
 
-    # Codes 0-31 are flagged unreliable (garbage extraction) in
-    # hp41_font_table.json / CLAUDE.md. But the "all segments on" bit
-    # string ("11111111111111") turns out to be the extraction tool's
-    # failure sentinel, not a real character - and it also shows up
-    # scattered through the nominally-validated 32-127 range (all of
-    # 102-125, i.e. most of lowercase f-z: never actually extracted).
-    # Detect the sentinel by value rather than trusting a hardcoded
-    # "0-31 is bad, 32-127 is fine" range, and blank every code that
-    # carries it so we render nothing rather than a garbled full block.
-    FAILURE_SENTINEL = "1" * 14
+def _compute_char_segments(font_table: JsonDict) -> tuple[list[int], list[int]]:
+    """Returns (char_segments, blanked): char_segments[128] is each
+    code's 14-bit segment-on/off mask; blanked lists which codes were
+    zeroed out instead (0-31, plus any 32-127 code carrying the source
+    table's all-1s extraction-failure sentinel - see CLAUDE.md's "Font /
+    display segment tables" section for why that sentinel exists and why
+    it's detected by value rather than a hardcoded range).
+    """
     char_segments = [0] * 128
     blanked = []
     for code in range(128):
         bits = font_table[str(code)]
-        assert len(bits) == 14, f"code {code}: expected 14 bits, got {bits!r}"
-        if code < 32 or bits == FAILURE_SENTINEL:
+        check(len(bits) == SEGMENT_BIT_COUNT,
+              f"code {code}: expected {SEGMENT_BIT_COUNT} bits, got {bits!r}")
+        if code < RELIABLE_CODE_START or bits == FAILURE_SENTINEL:
             blanked.append(code)
             continue
         mask = 0
@@ -87,11 +123,27 @@ def compute_tables():
             if b == "1":
                 mask |= (1 << i)
         char_segments[code] = mask
+    return char_segments, blanked
 
-    # Flatten all segment pixels into one array, with per-segment
-    # {offset, count} into it, indexed in ALL_SEGMENTS order (0-13 =
-    # SEGMENT_BIT_ORDER, 14-16 = dot_top/dot_bottom/comma_tail).
-    flat = []
+
+def _flatten_segments(pixel_map: JsonDict) -> tuple[list[Point], list[int], list[int]]:
+    """Flattens every named segment's pixel list into one array, with
+    per-segment {offset, count} into it, indexed in ALL_SEGMENTS order
+    (0-13 = SEGMENT_BIT_ORDER, 14-16 = dot_top/dot_bottom/comma_tail).
+    Returns (flat, offsets, counts).
+    """
+    check(
+        pixel_map["segment_bit_order_ref"] == SEGMENT_BIT_ORDER,
+        "hp41_pixel_segment_map.json's segment order no longer matches "
+        "this script - update SEGMENT_BIT_ORDER",
+    )
+    segments = pixel_map["segments"]
+    check(
+        set(segments.keys()) == set(ALL_SEGMENTS),
+        f"unexpected segment set in pixel map: {sorted(segments.keys())}",
+    )
+
+    flat: list[Point] = []
     offsets = []
     counts = []
     for name in ALL_SEGMENTS:
@@ -99,14 +151,23 @@ def compute_tables():
         offsets.append(len(flat))
         counts.append(len(pts))
         flat.extend(pts)
+    return flat, offsets, counts
 
-    # Annunciators: absolute (not per-cell) pixels, one static label per bit.
+
+def _flatten_annunciators(
+    annunciator_map: JsonDict,
+) -> tuple[list[int], list[Point], list[int], list[int]]:
+    """Absolute (not per-cell) pixels, one static label per bit. Returns
+    (ann_bits, ann_flat, ann_offsets, ann_counts).
+    """
     ann_data = annunciator_map["annunciators"]
-    assert set(ann_data.keys()) == set(ANNUNCIATOR_ORDER), \
-        f"unexpected annunciator set: {sorted(ann_data.keys())}"
+    check(
+        set(ann_data.keys()) == set(ANNUNCIATOR_ORDER),
+        f"unexpected annunciator set: {sorted(ann_data.keys())}",
+    )
 
     ann_bits = [ann_data[name]["bit"] for name in ANNUNCIATOR_ORDER]
-    ann_flat = []
+    ann_flat: list[Point] = []
     ann_offsets = []
     ann_counts = []
     for name in ANNUNCIATOR_ORDER:
@@ -114,6 +175,18 @@ def compute_tables():
         ann_offsets.append(len(ann_flat))
         ann_counts.append(len(pts))
         ann_flat.extend(pts)
+    return ann_bits, ann_flat, ann_offsets, ann_counts
+
+
+def compute_tables() -> DisplayTables:
+    """Parse the 3 JSON sources and return every derived table both
+    emitters need, so the plain-C and AVR/PROGMEM outputs are guaranteed
+    to be built from identical data - only how it's *printed* differs.
+    """
+    font_table, pixel_map, annunciator_map = _load_json_sources()
+    char_segments, blanked = _compute_char_segments(font_table)
+    flat, offsets, counts = _flatten_segments(pixel_map)
+    ann_bits, ann_flat, ann_offsets, ann_counts = _flatten_annunciators(annunciator_map)
 
     return {
         "cell_width_px": pixel_map["cell_width_px"],
@@ -130,85 +203,103 @@ def compute_tables():
     }
 
 
-def emit_c(d):
-    """Plain C source (no PROGMEM) for firmware/hp41_display_bridge.c on
-    the Pico - unchanged output from before this script was refactored
-    to share compute_tables() across both emitters.
+# --- Shared array-printing helpers (used by both emitters below) -----------
+# The plain-C and AVR/PROGMEM outputs render the exact same derived data
+# in near-identical shapes, differing only in the trailing PROGMEM
+# attribute - factored out here rather than duplicated so the two
+# emitters can't silently drift in formatting.
+
+def _print_u16_array(name: str, size: int, values: list[int], *, progmem: bool) -> None:
+    suffix = " PROGMEM" if progmem else ""
+    print(f"const uint16_t {name}[{size}]{suffix} = {{")
+    for i in range(0, len(values), 8):
+        row = values[i:i + 8]
+        print("  " + ", ".join(f"0x{v:04X}" for v in row) + ",")
+    print("};")
+
+
+def _print_annunciator_bits(name: str, size: int, values: list[int], *, progmem: bool) -> None:
+    """Same shape as _print_u16_array(), but annunciator bit masks are
+    only ever 3 hex digits wide (12-bit values) and there are few enough
+    (12) to print on a single line - a separate function rather than
+    extra parameters on _print_u16_array() to keep that one's signature
+    small.
     """
+    suffix = " PROGMEM" if progmem else ""
+    print(f"const uint16_t {name}[{size}]{suffix} = {{")
+    print("  " + ", ".join(f"0x{v:03X}" for v in values) + ",")
+    print("};")
+
+
+def _print_pixel_array(name: str, size: int, pts: list[Point], *, progmem: bool) -> None:
+    suffix = " PROGMEM" if progmem else ""
+    print(f"const hp41_pixel_t {name}[{size}]{suffix} = {{")
+    for i in range(0, len(pts), 8):
+        row = pts[i:i + 8]
+        print("  " + ", ".join(f"{{{x},{y}}}" for x, y in row) + ",")
+    print("};")
+
+
+def _print_u8_array(name: str, size: int, values: list[int], *, progmem: bool) -> None:
+    suffix = " PROGMEM" if progmem else ""
+    print(f"const uint8_t {name}[{size}]{suffix} = {{")
+    print("  " + ", ".join(str(v) for v in values) + ",")
+    print("};")
+
+
+# --- Plain-C emitter (firmware/hp41_display_bridge.c on the Pico) ----------
+
+def _emit_char_segments_c(d: DisplayTables) -> None:
     print(f"// NOTE: {len(d['blanked'])} codes rendered blank (0-31, plus any "
           f"32-127 code carrying the all-1s extraction-failure sentinel):",
           file=sys.stderr)
     print(f"//   {d['blanked']}", file=sys.stderr)
 
-    print("// Auto-generated by gen_display_tables.py from "
-          "hp41_font_table.json and hp41_pixel_segment_map.json.")
-    print("// Do not hand-edit - re-run the script instead.")
-    print('#include "hp41_display_tables.h"')
-    print()
-
     print("// Bit i set -> segment SEGMENT_BIT_ORDER[i] (see .h) is lit.")
     print("// Codes 0-31, plus any code that carried the source table's")
     print("// all-1s extraction-failure sentinel (see gen_display_tables.py),")
     print("// are zeroed (blank) rather than rendered as a garbled block.")
-    print(f"const uint16_t hp41_char_segments[128] = {{")
-    for i in range(0, 128, 8):
-        row = d["char_segments"][i:i + 8]
-        print("  " + ", ".join(f"0x{m:04X}" for m in row) + ",")
-    print("};")
+    _print_u16_array("hp41_char_segments", 128, d["char_segments"], progmem=False)
     print()
 
+
+def _emit_segment_pixels_c(d: DisplayTables) -> None:
     flat, offsets, counts = d["flat"], d["offsets"], d["counts"]
     print(f"// {len(flat)} total (x,y) pixel offsets across all "
           f"{len(ALL_SEGMENTS)} segments, local to a "
           f'{d["cell_width_px"]}px-wide character cell '
           f'(y absolute 0-{d["cell_height_px"] - 1}).')
-    print(f"const hp41_pixel_t hp41_segment_pixels[{len(flat)}] = {{")
-    for i in range(0, len(flat), 8):
-        row = flat[i:i + 8]
-        print("  " + ", ".join(f"{{{x},{y}}}" for x, y in row) + ",")
-    print("};")
+    _print_pixel_array("hp41_segment_pixels", len(flat), flat, progmem=False)
     print()
 
     print("// Index with segment_index (0-13 SEGMENT_BIT_ORDER, "
           "14=dot_top, 15=dot_bottom, 16=comma_tail).")
-    print(f"const uint8_t hp41_segment_pixel_offset[{len(ALL_SEGMENTS)}] = {{")
-    print("  " + ", ".join(str(o) for o in offsets) + ",")
-    print("};")
-    print(f"const uint8_t hp41_segment_pixel_count[{len(ALL_SEGMENTS)}] = {{")
-    print("  " + ", ".join(str(c) for c in counts) + ",")
-    print("};")
+    _print_u8_array("hp41_segment_pixel_offset", len(ALL_SEGMENTS), offsets, progmem=False)
+    _print_u8_array("hp41_segment_pixel_count", len(ALL_SEGMENTS), counts, progmem=False)
 
     print()
     print("// Summary (for reference, not compiled):")
     for i, name in enumerate(ALL_SEGMENTS):
         print(f"//   [{i:2d}] {name:18s} {counts[i]} px @ offset {offsets[i]}")
 
+
+def _emit_annunciators_c(d: DisplayTables) -> None:
     ann_bits = d["ann_bits"]
     ann_flat, ann_offsets, ann_counts = d["ann_flat"], d["ann_offsets"], d["ann_counts"]
+    n_ann = len(ANNUNCIATOR_ORDER)
 
     print()
-    print(f"const uint16_t hp41_annunciator_bits[{len(ANNUNCIATOR_ORDER)}] = {{")
-    print("  " + ", ".join(f"0x{b:03X}" for b in ann_bits) + ",")
-    print("};")
+    _print_annunciator_bits("hp41_annunciator_bits", n_ann, ann_bits, progmem=False)
     print()
 
-    print(f"// {len(ann_flat)} total absolute (x,y) pixels across all "
-          f"{len(ANNUNCIATOR_ORDER)} annunciators.")
-    print(f"const hp41_pixel_t hp41_annunciator_pixels[{len(ann_flat)}] = {{")
-    for i in range(0, len(ann_flat), 8):
-        row = ann_flat[i:i + 8]
-        print("  " + ", ".join(f"{{{x},{y}}}" for x, y in row) + ",")
-    print("};")
+    print(f"// {len(ann_flat)} total absolute (x,y) pixels across all {n_ann} annunciators.")
+    _print_pixel_array("hp41_annunciator_pixels", len(ann_flat), ann_flat, progmem=False)
     print()
 
     print("// Index with ANNUNCIATOR_ORDER (BAT, USER, G, RAD, SHIFT, "
           "0, 1, 2, 3, 4, PRGM, ALPHA).")
-    print(f"const uint8_t hp41_annunciator_pixel_offset[{len(ANNUNCIATOR_ORDER)}] = {{")
-    print("  " + ", ".join(str(o) for o in ann_offsets) + ",")
-    print("};")
-    print(f"const uint8_t hp41_annunciator_pixel_count[{len(ANNUNCIATOR_ORDER)}] = {{")
-    print("  " + ", ".join(str(c) for c in ann_counts) + ",")
-    print("};")
+    _print_u8_array("hp41_annunciator_pixel_offset", n_ann, ann_offsets, progmem=False)
+    _print_u8_array("hp41_annunciator_pixel_count", n_ann, ann_counts, progmem=False)
 
     print()
     print("// Summary (for reference, not compiled):")
@@ -217,16 +308,26 @@ def emit_c(d):
               f"{ann_counts[i]} px @ offset {ann_offsets[i]}")
 
 
-def emit_avr_header(d):
-    """Self-contained PROGMEM header for the Arduino display bridge -
-    same data as emit_c(), but as a single .h (matching that sketch's
-    existing bitmaps.h convention: one PROGMEM header, no separate .c),
-    with avr/pgmspace.h's PROGMEM attribute on every array so the ~1.1KB
-    of table data lives in flash only, not copied into the Uno's scarce
-    2KB SRAM (the default behavior for `const` arrays on classic AVR
-    without PROGMEM - a well-known Arduino gotcha, see
-    NHD14432_DisplayBridge/CLAUDE.md).
+def emit_c(d: DisplayTables) -> None:
+    """Plain C source (no PROGMEM) for firmware/hp41_display_bridge.c on
+    the Pico - unchanged output from before this script was refactored
+    to share compute_tables() and the array-printing helpers above
+    across both emitters.
     """
+    print("// Auto-generated by gen_display_tables.py from "
+          "hp41_font_table.json and hp41_pixel_segment_map.json.")
+    print("// Do not hand-edit - re-run the script instead.")
+    print('#include "hp41_display_tables.h"')
+    print()
+
+    _emit_char_segments_c(d)
+    _emit_segment_pixels_c(d)
+    _emit_annunciators_c(d)
+
+
+# --- AVR/PROGMEM emitter (Arduino display bridge) --------------------------
+
+def _emit_header_avr(d: DisplayTables) -> None:
     print("// Auto-generated by font-tables/gen_display_tables.py --avr from")
     print("// hp41_font_table.json and hp41_pixel_segment_map.json.")
     print("// Do not hand-edit - re-run the script instead. This is the AVR/")
@@ -251,65 +352,65 @@ def emit_avr_header(d):
     print("} hp41_pixel_t;")
     print()
 
+
+def _emit_char_segments_avr(d: DisplayTables) -> None:
     print("// Bit i set -> segment SEGMENT_BIT_ORDER[i] (see gen_display_tables.py) is lit.")
-    print("const uint16_t hp41_char_segments[128] PROGMEM = {")
-    for i in range(0, 128, 8):
-        row = d["char_segments"][i:i + 8]
-        print("  " + ", ".join(f"0x{m:04X}" for m in row) + ",")
-    print("};")
+    _print_u16_array("hp41_char_segments", 128, d["char_segments"], progmem=True)
     print()
 
+
+def _emit_segment_pixels_avr(d: DisplayTables) -> None:
     flat, offsets, counts = d["flat"], d["offsets"], d["counts"]
     print(f"// {len(flat)} total (x,y) pixel offsets across all "
           f"{len(ALL_SEGMENTS)} segments, local to a "
           f'{d["cell_width_px"]}px-wide character cell.')
-    print(f"const hp41_pixel_t hp41_segment_pixels[{len(flat)}] PROGMEM = {{")
-    for i in range(0, len(flat), 8):
-        row = flat[i:i + 8]
-        print("  " + ", ".join(f"{{{x},{y}}}" for x, y in row) + ",")
-    print("};")
+    _print_pixel_array("hp41_segment_pixels", len(flat), flat, progmem=True)
     print()
 
     print("// Index with segment_index (0-13 SEGMENT_BIT_ORDER, "
           "14=dot_top, 15=dot_bottom, 16=comma_tail).")
-    print(f"const uint8_t hp41_segment_pixel_offset[{len(ALL_SEGMENTS)}] PROGMEM = {{")
-    print("  " + ", ".join(str(o) for o in offsets) + ",")
-    print("};")
-    print(f"const uint8_t hp41_segment_pixel_count[{len(ALL_SEGMENTS)}] PROGMEM = {{")
-    print("  " + ", ".join(str(c) for c in counts) + ",")
-    print("};")
+    _print_u8_array("hp41_segment_pixel_offset", len(ALL_SEGMENTS), offsets, progmem=True)
+    _print_u8_array("hp41_segment_pixel_count", len(ALL_SEGMENTS), counts, progmem=True)
     print()
 
+
+def _emit_annunciators_avr(d: DisplayTables) -> None:
     ann_bits = d["ann_bits"]
     ann_flat, ann_offsets, ann_counts = d["ann_flat"], d["ann_offsets"], d["ann_counts"]
+    n_ann = len(ANNUNCIATOR_ORDER)
 
     print("#define HP41_NUM_ANNUNCIATORS 12  /* BAT, USER, G, RAD, SHIFT, 0-4, PRGM, ALPHA */")
     print()
-    print(f"const uint16_t hp41_annunciator_bits[{len(ANNUNCIATOR_ORDER)}] PROGMEM = {{")
-    print("  " + ", ".join(f"0x{b:03X}" for b in ann_bits) + ",")
-    print("};")
+    _print_annunciator_bits("hp41_annunciator_bits", n_ann, ann_bits, progmem=True)
     print()
 
-    print(f"// {len(ann_flat)} total absolute (x,y) pixels across all "
-          f"{len(ANNUNCIATOR_ORDER)} annunciators.")
-    print(f"const hp41_pixel_t hp41_annunciator_pixels[{len(ann_flat)}] PROGMEM = {{")
-    for i in range(0, len(ann_flat), 8):
-        row = ann_flat[i:i + 8]
-        print("  " + ", ".join(f"{{{x},{y}}}" for x, y in row) + ",")
-    print("};")
+    print(f"// {len(ann_flat)} total absolute (x,y) pixels across all {n_ann} annunciators.")
+    _print_pixel_array("hp41_annunciator_pixels", len(ann_flat), ann_flat, progmem=True)
     print()
 
     print("// Index with ANNUNCIATOR_ORDER (BAT, USER, G, RAD, SHIFT, "
           "0, 1, 2, 3, 4, PRGM, ALPHA).")
-    print(f"const uint8_t hp41_annunciator_pixel_offset[{len(ANNUNCIATOR_ORDER)}] PROGMEM = {{")
-    print("  " + ", ".join(str(o) for o in ann_offsets) + ",")
-    print("};")
-    print(f"const uint8_t hp41_annunciator_pixel_count[{len(ANNUNCIATOR_ORDER)}] PROGMEM = {{")
-    print("  " + ", ".join(str(c) for c in ann_counts) + ",")
-    print("};")
+    _print_u8_array("hp41_annunciator_pixel_offset", n_ann, ann_offsets, progmem=True)
+    _print_u8_array("hp41_annunciator_pixel_count", n_ann, ann_counts, progmem=True)
 
 
-def main():
+def emit_avr_header(d: DisplayTables) -> None:
+    """Self-contained PROGMEM header for the Arduino display bridge -
+    same data as emit_c(), but as a single .h (matching that sketch's
+    existing bitmaps.h convention: one PROGMEM header, no separate .c),
+    with avr/pgmspace.h's PROGMEM attribute on every array so the ~1.1KB
+    of table data lives in flash only, not copied into the Uno's scarce
+    2KB SRAM (the default behavior for `const` arrays on classic AVR
+    without PROGMEM - a well-known Arduino gotcha, see
+    NHD14432_DisplayBridge/CLAUDE.md).
+    """
+    _emit_header_avr(d)
+    _emit_char_segments_avr(d)
+    _emit_segment_pixels_avr(d)
+    _emit_annunciators_avr(d)
+
+
+def main() -> None:
     d = compute_tables()
     if "--avr" in sys.argv:
         emit_avr_header(d)

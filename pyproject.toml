@@ -16,6 +16,9 @@ ignore = [
     "COM812",  # trailing comma - formatting nit, not a correctness rule
     "S603",    # subprocess call check - flagged per-callsite instead where
                # this project genuinely shells out (arduino-cli, picotool)
+    "FBT001",  # boolean positional arg - check()'s `condition` param (Power of
+               # 10 Rule 5's non-strippable stand-in for `assert cond, msg`)
+               # is deliberately positional to mirror `assert`'s own syntax
 ]
 
 [tool.mypy]

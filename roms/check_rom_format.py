@@ -6,27 +6,34 @@ whether they're really "4096 words, 16-bit slots, only low 10 bits used."
 Usage:
     python3 check_rom_format.py /Applications/my41cx.app/Contents/Resources/NUT0.ROM
 """
-import sys
 import struct
+import sys
+from pathlib import Path
 
-def analyze(path, endian_fmt, label):
-    with open(path, "rb") as f:
+MAX_ROM_WORD_VALUE = 0x3FF  # 10-bit words, if the format assumption holds
+EXPECTED_ARGC = 2  # argv[0] plus exactly one .ROM path
+PREVIEW_WORD_COUNT = 16
+
+
+def analyze(path: Path, endian_fmt: str, label: str) -> int:
+    with path.open("rb") as f:
         data = f.read()
     n_words = len(data) // 2
-    words = struct.unpack(f"{endian_fmt}{n_words}H", data[:n_words*2])
-    over_10bit = [w for w in words if w > 0x3FF]
+    words = struct.unpack(f"{endian_fmt}{n_words}H", data[:n_words * 2])
+    over_10bit = [w for w in words if w > MAX_ROM_WORD_VALUE]
     print(f"--- {label} ---")
     print(f"  word count: {n_words}")
     print(f"  words with bits above 10 set: {len(over_10bit)} / {n_words}")
-    print(f"  first 16 words: {[hex(w) for w in words[:16]]}")
+    print(f"  first {PREVIEW_WORD_COUNT} words: {[hex(w) for w in words[:PREVIEW_WORD_COUNT]]}")
     print()
     return len(over_10bit)
 
-def main():
-    if len(sys.argv) != 2:
+
+def main() -> None:
+    if len(sys.argv) != EXPECTED_ARGC:
         print(__doc__)
         sys.exit(1)
-    path = sys.argv[1]
+    path = Path(sys.argv[1])
     bad_le = analyze(path, "<", "little-endian uint16")
     bad_be = analyze(path, ">", "big-endian uint16")
 
@@ -42,6 +49,7 @@ def main():
     else:
         print("Neither ordering is clean — this probably ISN'T simple")
         print("unpacked 16-bit words. Send me this output and I'll rethink it.")
+
 
 if __name__ == "__main__":
     main()
