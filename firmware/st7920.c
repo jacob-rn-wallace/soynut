@@ -1,6 +1,8 @@
 #include "st7920.h"
 #include "pins.h"
 
+#include <assert.h>
+
 #include "pico/stdlib.h"
 
 // --- Low-level 8-bit parallel bus ---------------------------------------
@@ -32,6 +34,12 @@ static const uint DATA_PINS[8] = {
 #define BUS_DELAY_US 2 // generous vs. the datasheet's ns-scale address/data setup and E pulse-width figures
 
 static void write_byte(bool is_data, uint8_t value, uint32_t delay_us) {
+    /* E must already be low when a new transaction begins - the
+     * datasheet's falling-edge latch only means something relative to a
+     * preceding high state, and every prior write_byte() call (including
+     * st7920_init()'s own initial gpio_put()) leaves it low on exit. */
+    assert(gpio_get(PIN_LCD_E) == 0);
+
     gpio_put(PIN_LCD_RS, is_data ? 1 : 0);
     for (int i = 0; i < 8; i++) {
         gpio_put(DATA_PINS[i], (value >> i) & 1);
@@ -42,6 +50,7 @@ static void write_byte(bool is_data, uint8_t value, uint32_t delay_us) {
     busy_wait_us(BUS_DELAY_US); // E pulse width / data setup before E falls
     gpio_put(PIN_LCD_E, 0);     // falling edge - this is what actually latches the byte
     busy_wait_us(BUS_DELAY_US); // data hold time after E falls
+    assert(gpio_get(PIN_LCD_E) == 0); // leaves E low, per the precondition above
 
     busy_wait_us(delay_us);
 }
@@ -65,11 +74,14 @@ static inline void write_data(uint8_t data) {
 #define CMD_GDRAM_ADDR_BASE                0x80
 
 static void set_gdram_addr(uint8_t vertical, uint8_t horizontal) {
+    assert(vertical < LCD_HEIGHT_PX); /* every real caller passes a y coordinate */
+    assert(horizontal <= 0x0F);       /* 4-bit field per the datasheet's command layout */
     write_cmd(CMD_GDRAM_ADDR_BASE | (vertical & 0x3F));
     write_cmd(CMD_GDRAM_ADDR_BASE | (horizontal & 0x0F));
 }
 
 void st7920_init(void) {
+    assert(sizeof(DATA_PINS) / sizeof(DATA_PINS[0]) == 8);
     gpio_init(PIN_LCD_RS);
     gpio_init(PIN_LCD_E);
     gpio_set_dir(PIN_LCD_RS, GPIO_OUT);
@@ -79,6 +91,7 @@ void st7920_init(void) {
         gpio_set_dir(DATA_PINS[i], GPIO_OUT);
     }
     gpio_put(PIN_LCD_E, 0);
+    assert(gpio_get(PIN_LCD_E) == 0);
 
     sleep_ms(40); // power-on delay per datasheet (>40ms)
 
@@ -102,6 +115,8 @@ void st7920_init(void) {
 }
 
 void st7920_clear(void) {
+    assert(LCD_BYTES_PER_ROW % 2 == 0); /* the write-two-bytes-at-a-time loop below assumes this */
+    assert(LCD_HEIGHT_PX > 0);
     for (uint8_t y = 0; y < LCD_HEIGHT_PX; y++) {
         set_gdram_addr(y, 0);
         for (uint8_t w = 0; w < LCD_BYTES_PER_ROW / 2; w++) {
@@ -122,6 +137,8 @@ void st7920_clear(void) {
 // is 9 words (LCD_BYTES_PER_ROW/2 = 18/2 = 9), covering the full 144px
 // width in one contiguous burst after a single address-set.
 void st7920_draw_frame(const uint8_t *fb) {
+    assert(fb != NULL);
+    assert(LCD_BYTES_PER_ROW % 2 == 0); /* see st7920_clear()'s note */
     for (int y = 0; y < LCD_HEIGHT_PX; y++) {
         const uint8_t *row = fb + (size_t)y * LCD_BYTES_PER_ROW;
 

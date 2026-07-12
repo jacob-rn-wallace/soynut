@@ -3,6 +3,8 @@
 
 #include "hp41_key_hold_bridge.h"
 
+#include <assert.h>
+
 #define GLOBAL extern
 #include "nutcpu.h"
 
@@ -14,17 +16,23 @@ static bool hold_active = false;
  * for a single three-line helper. */
 static void push_key(unsigned char code)
 {
+    assert(lgkeybuf >= 0 && lgkeybuf <= 8);
     if (lgkeybuf < 8)
         keybuffer[lgkeybuf++] = (char)code;
+    assert(lgkeybuf >= 0 && lgkeybuf <= 8);
 }
 
 void hp41_key_hold_press(int keycode)
 {
+    assert(keycode >= 0 && keycode <= 255); /* stored/pushed as unsigned char below */
     held_keycode = keycode;
     hold_active = true;
     push_key((unsigned char)keycode);
+    assert(hold_active);
 }
 
+/* Power of 10, Rule 5 note: a single unconditional assignment - see
+ * hp41_key_bridge.c's hp41_key_bridge_reset() for the same rationale. */
 void hp41_key_hold_release(void)
 {
     hold_active = false;
@@ -37,8 +45,10 @@ bool hp41_key_hold_active(void)
 
 void hp41_key_hold_sustain(void)
 {
+    assert(held_keycode >= 0 && held_keycode <= 255);
     if (hold_active) {
         flagKB = 1;
         regK = (unsigned char)held_keycode;
+        assert(flagKB == 1 && regK == (unsigned char)held_keycode);
     }
 }

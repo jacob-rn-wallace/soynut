@@ -85,6 +85,16 @@ set_source_files_properties(${EMU41GCC_DIR}/nutcpu.c PROPERTIES
 # APPEND is required here, not set_source_files_properties, since that
 # would silently clobber the -fcommon options already set above for
 # several of these same files.
+#
+# -UNDEBUG is here for Rule 5: the Pico SDK's default build type is
+# Release, which sets -DNDEBUG - and <assert.h> compiles every assert()
+# to nothing under NDEBUG, silently defeating every invariant check this
+# project's rewrite just added. Discovered when hp41_arduino_bridge.c's
+# uart_init() return-value check triggered -Werror=unused-variable in a
+# real ARM build: the assert() that read it had been compiled out from
+# under it. -U here re-enables assert() in exactly this project's own
+# sources, regardless of CMAKE_BUILD_TYPE, without touching optimization
+# flags or affecting emu41gcc/pico-sdk's own NDEBUG-gated behavior.
 set(SOYNUT_OWN_SOURCES
         main.c
         st7920.c
@@ -98,7 +108,7 @@ set(SOYNUT_OWN_SOURCES
         emu41gcc_compat/nut_rom.c
 )
 set_property(SOURCE ${SOYNUT_OWN_SOURCES} APPEND PROPERTY COMPILE_OPTIONS
-        -Wall -Wextra -Wpedantic -Werror
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG
 )
 
 target_link_libraries(soynut

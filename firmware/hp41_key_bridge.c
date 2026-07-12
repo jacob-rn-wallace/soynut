@@ -5,6 +5,7 @@
 
 #include "hp41_key_bridge.h"
 
+#include <assert.h>
 #include <ctype.h>
 #include <string.h>
 
@@ -75,12 +76,16 @@ static const named_key_t named_keys[] = {
  */
 static void push_key(unsigned char code)
 {
+    assert(lgkeybuf >= 0 && lgkeybuf <= 8);
     if (lgkeybuf < 8)
         keybuffer[lgkeybuf++] = (char)code;
+    assert(lgkeybuf >= 0 && lgkeybuf <= 8);
 }
 
 static void handle_named_key(const char *name)
 {
+    assert(name != NULL);
+    assert(NUM_NAMED_KEYS > 0);
     for (size_t i = 0; i < NUM_NAMED_KEYS; i++) {
         if (strcmp(name, named_keys[i].name) == 0) {
             push_key(named_keys[i].code1);
@@ -103,6 +108,8 @@ static void handle_named_key(const char *name)
  */
 static unsigned char resolve_hold_code(const char *name)
 {
+    assert(name != NULL);
+    assert(NUM_NAMED_KEYS > 0);
     for (size_t i = 0; i < NUM_NAMED_KEYS; i++) {
         if (strcmp(name, named_keys[i].name) == 0)
             return named_keys[i].code2 ? 0 : named_keys[i].code1;
@@ -127,6 +134,11 @@ static unsigned char resolve_hold_code(const char *name)
 static char name_buf[NAME_BUF_SIZE];
 static int name_len = STATE_NORMAL;
 
+/* Power of 10, Rule 5 note: this is a single, unconditional assignment -
+ * there's no precondition to check and the postcondition is exactly
+ * the line above it, so an assertion here would just restate it rather
+ * than catch a real anomaly (same rationale as nut_stubs.c's no-op
+ * stubs). */
 void hp41_key_bridge_reset(void)
 {
     name_len = STATE_NORMAL;
@@ -134,6 +146,8 @@ void hp41_key_bridge_reset(void)
 
 void hp41_key_bridge_feed_byte(int c)
 {
+    assert(name_len >= STATE_OVERFLOW && name_len < NAME_BUF_SIZE);
+
     if (name_len == STATE_NORMAL) {
         if (c == '[') {
             name_len = 0;
@@ -182,4 +196,5 @@ void hp41_key_bridge_feed_byte(int c)
         return;
     }
     name_buf[name_len++] = (char)toupper(c);
+    assert(name_len <= NAME_BUF_SIZE - 1); /* never overruns name_buf[] */
 }

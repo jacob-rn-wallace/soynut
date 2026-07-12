@@ -1,5 +1,6 @@
 #include "hp41_arduino_bridge.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -33,12 +34,22 @@ extern int lcd_ann;
 #define DISPLAY_STATE_SIZE (HP41_NUM_CELLS * 3 + 2)
 
 void hp41_arduino_bridge_init(void) {
-    uart_init(BRIDGE_UART, BRIDGE_BAUD_RATE);
+    /* uart_init() returns the actual baud rate the hardware clock
+     * divider achieved, which can differ slightly from what was
+     * requested - checked here (Power of 10, Rule 7) rather than
+     * silently discarded, since a divider far off the requested rate
+     * would silently corrupt every byte this bridge ever sends. */
+    uint actual_baud = uart_init(BRIDGE_UART, BRIDGE_BAUD_RATE);
+    assert(actual_baud > 0);
+    assert(actual_baud >= BRIDGE_BAUD_RATE * 9 / 10
+           && actual_baud <= BRIDGE_BAUD_RATE * 11 / 10); /* within 10% */
     gpio_set_function(PIN_ARDUINO_UART_TX, GPIO_FUNC_UART);
     gpio_set_function(PIN_ARDUINO_UART_RX, GPIO_FUNC_UART);
 }
 
 void hp41_arduino_bridge_send_frame(const uint8_t *fb) {
+    assert(fb != NULL);
+    assert(LCD_FB_SIZE > 0);
     uint8_t checksum = 0;
     for (int i = 0; i < LCD_FB_SIZE; i++) {
         checksum ^= fb[i];
@@ -51,6 +62,11 @@ void hp41_arduino_bridge_send_frame(const uint8_t *fb) {
 
 void hp41_arduino_bridge_send_display_state(void) {
     uint8_t payload[DISPLAY_STATE_SIZE];
+    assert(sizeof(payload) == DISPLAY_STATE_SIZE);
+    /* lcd_ann is packed into 2 bytes below (low byte, then high byte) -
+     * only meaningful if it actually fits the 12 annunciator bits it's
+     * documented to hold (see CLAUDE.md's "Display" section). */
+    assert(lcd_ann >= 0 && lcd_ann <= 0xFFF);
     memcpy(payload, lcd_a, HP41_NUM_CELLS);
     memcpy(payload + HP41_NUM_CELLS, lcd_b, HP41_NUM_CELLS);
     memcpy(payload + HP41_NUM_CELLS * 2, lcd_c, HP41_NUM_CELLS);
@@ -91,6 +107,8 @@ void hp41_arduino_bridge_send_test_payload(void) {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00,
     };
+    assert(sizeof(payload) == DISPLAY_STATE_SIZE);
+    assert(DISPLAY_STATE_SIZE > 0);
     uint8_t checksum = 0;
     for (int i = 0; i < DISPLAY_STATE_SIZE; i++) {
         checksum ^= payload[i];

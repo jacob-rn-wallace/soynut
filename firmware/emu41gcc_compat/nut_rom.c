@@ -48,5 +48,11 @@ void nut_boot(void)
   Carry = 1;         /* coldstart flag - checked by the ROM on power-up */
   mode_printer = -1; /* no HP82143 printer plugged in */
   assert(regPC == 0 && regST == 0x0800);
-  assert(Carry == 1 && mode_printer == -1);
+  /* mode_printer is `char` (nutcpu.h), plain (unsigned by default on
+   * this ARM target's ABI) - comparing it to the int literal -1 would
+   * be a tautologically-false always-promotes-positive comparison
+   * (-Werror=type-limits). Casting the literal to `char` first compares
+   * at the variable's own width instead, correctly matching the same
+   * bit pattern `mode_printer = -1;` above actually stored. */
+  assert(Carry == 1 && mode_printer == (char)-1);
 }
