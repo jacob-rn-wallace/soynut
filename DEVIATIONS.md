@@ -111,6 +111,27 @@ instance of unbounded growth found so far — the serial log pane
 appending forever during a long session — is fixed during the rewrite
 (capped to a fixed number of lines), not excepted.
 
+## Implementation note: `-UNDEBUG` keeps C assertions active on the Pico/AVR builds
+
+Not a deviation, but worth recording since it isn't obvious: the Pico
+SDK's default CMake build type is Release, which sets `-DNDEBUG` - and
+`<assert.h>` compiles every `assert()` to nothing under `NDEBUG`,
+silently disabling every Rule 5 check this rewrite added. This was
+caught for real, not hypothetically: `hp41_arduino_bridge_init()`'s
+`uart_init()` return-value check (an `assert()` reading a variable that
+would otherwise go unused) turned an ARM build failure
+(`-Werror=unused-variable`) into the actual symptom. `firmware/
+CMakeLists.txt` and `lcd_bringup/CMakeLists.txt` both append `-UNDEBUG`
+to their `SOYNUT_OWN_SOURCES`/own-two-files `set_property(... COMPILE_
+OPTIONS ...)` blocks so `assert()` stays active in exactly this
+project's own sources regardless of build type, without touching
+optimization flags or `emu41gcc`/`pico-sdk`'s own `NDEBUG`-gated
+behavior. `tests/Makefile` and `tools/Makefile` never set `-DNDEBUG` at
+all (plain `cc`, no build-type default), so this doesn't apply there.
+The Arduino toolchain (`arduino-cli`/avr-gcc) also doesn't set `NDEBUG`
+by default, so `NHD14432_DisplayBridge.ino`'s `assert()`s are active as
+compiled - no equivalent fix was needed there.
+
 ## Implementation note: Rule 5 assertions in Python use a helper, not bare `assert`
 
 Not a deviation, but worth recording since it isn't obvious: Python's
