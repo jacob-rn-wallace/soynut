@@ -865,19 +865,24 @@ neither should be committed.
 
 ### Native (host) tests
 
-No ARM toolchain needed — these compile and run with the system `cc`:
+No ARM toolchain needed — `tests/Makefile` builds and runs all five
+with the system `cc`:
 
 ```
-cc -std=gnu11 -fcommon -Iemu41gcc -Ifirmware/emu41gcc_compat \
-   -include firmware/emu41gcc_compat/nut_stubs.h \
-   -o tests/build/nut_smoke_test tests/nut_smoke_test.c \
-   emu41gcc/nutcpu.c emu41gcc/display.c \
-   firmware/emu41gcc_compat/nut_stubs.c \
-   firmware/emu41gcc_compat/nut_globals.c \
-   firmware/emu41gcc_compat/nut_rom.c \
-   roms/rom_images.c
-./tests/build/nut_smoke_test
+make -C tests run
 ```
+
+(`make -C tests` alone builds without running; `make -C tests clean`
+removes `tests/build/`.) Power of 10, Rule 10: the Makefile compiles
+this project's own sources (the `tests/*.c` files themselves, plus
+`firmware/emu41gcc_compat/{nut_stubs,nut_globals,nut_rom}.c` and
+`firmware/hp41_*.c`) with `-Wall -Wextra -Wpedantic -Werror`, and the
+vendored/generated sources they link against (`emu41gcc/*.c`,
+`roms/rom_images.c`, `font-tables/hp41_display_tables.c`) with only the
+flags they actually need to build (`-fcommon`, or `nutcpu.c`'s
+`nut_stubs.h` force-include) — mirroring `firmware/CMakeLists.txt`'s own
+per-file flag scoping exactly, so strict warnings never leak onto code
+this project doesn't own.
 
 `tests/nut_smoke_test.c` boots the ROM and runs `executeNUT()` in a
 bounded loop — the real HP-41 ROM executes cleanly (thousands of
@@ -885,8 +890,8 @@ instructions, zero invalid opcodes) and reaches `POWOFF` showing
 `MEMORY LOST` on a cold start, exactly matching real hardware. The other
 native tests (`display_bridge_test.c`, `key_bridge_test.c`,
 `key_hold_test.c`, `hold_trace_test.c`) follow the same pattern with
-their own additional source files — see each file's own header comment
-for its exact build line, or adapt the one above.
+their own additional source files — see `tests/Makefile` for exactly
+which objects each binary links.
 
 ## ROM wiring — `firmware/emu41gcc_compat/nut_rom.h`/`.c`
 

@@ -11,28 +11,18 @@
  * tests/nut_smoke_test.c should be visually legible below as blocky
  * 14-segment characters.
  *
- * Build (from repo root):
- *   cc -std=gnu11 -fcommon \
- *      -Iemu41gcc -Ifirmware/emu41gcc_compat -Ifirmware -Ifont-tables \
- *      -include firmware/emu41gcc_compat/nut_stubs.h \
- *      -o tests/build/display_bridge_test tests/display_bridge_test.c \
- *      emu41gcc/nutcpu.c emu41gcc/display.c \
- *      firmware/emu41gcc_compat/nut_stubs.c \
- *      firmware/emu41gcc_compat/nut_globals.c \
- *      firmware/emu41gcc_compat/nut_rom.c \
- *      firmware/hp41_display_bridge.c \
- *      roms/rom_images.c font-tables/hp41_display_tables.c
- *   ./tests/build/display_bridge_test
+ * Build: make -C tests
  */
 
+#include <assert.h>
 #include <stdio.h>
 
 #define GLOBAL extern
 #include "nutcpu.h"
 
-#include "nut_rom.h"
 #include "hp41_display_bridge.h"
 #include "hp41_display_tables.h" /* hp41_annunciator_bits/pixel_count, for the annunciator check below */
+#include "nut_rom.h"
 #include "st7920.h" /* LCD_WIDTH_PX/LCD_HEIGHT_PX/LCD_FB_SIZE/LCD_BYTES_PER_ROW only - st7920_draw_frame() itself is never called/linked here */
 
 /* lcd_ann is a plain global in emu41gcc/display.c (no header exposes it -
@@ -42,19 +32,9 @@
  */
 extern int lcd_ann;
 
-static int get_px(const uint8_t *fb, int x, int y)
-{
-    return (fb[y * LCD_BYTES_PER_ROW + x / 8] >> (7 - (x % 8))) & 1;
-}
-
-static int count_lit(const uint8_t *fb)
-{
-    int lit = 0;
-    for (int y = 0; y < LCD_HEIGHT_PX; y++)
-        for (int x = 0; x < LCD_WIDTH_PX; x++)
-            lit += get_px(fb, x, y);
-    return lit;
-}
+#define BATCH_SIZE 1000
+#define MAX_INSTR 2000000
+#define MAX_BATCHES ((MAX_INSTR / BATCH_SIZE) + 1) /* see nut_smoke_test.c's run_until_settled() */
 
 /* hp41_display_bridge.c's hp41_display_render() calls st7920_draw_frame()
  * (real GPIO/ST7920 code, firmware/st7920.c - Pico-only, doesn't build
@@ -64,59 +44,104 @@ static int count_lit(const uint8_t *fb)
  */
 void st7920_draw_frame(const uint8_t *fb) { (void)fb; }
 
-int main(void)
+static int get_px(const uint8_t *fb, int x, int y)
 {
-    uint8_t fb[LCD_FB_SIZE];
-    int ret;
-    const int max_instr = 2000000;
+    assert(fb != NULL);
+    assert(x >= 0 && x < LCD_WIDTH_PX && y >= 0 && y < LCD_HEIGHT_PX);
+    return (fb[y * LCD_BYTES_PER_ROW + x / 8] >> (7 - (x % 8))) & 1;
+}
 
-    nut_boot();
-    do {
-        ret = executeNUT(1000);
-    } while (ret == 0 && cptinstr < max_instr);
+static int count_lit(const uint8_t *fb)
+{
+    assert(fb != NULL);
+    int lit = 0;
+    for (int y = 0; y < LCD_HEIGHT_PX; y++)
+        for (int x = 0; x < LCD_WIDTH_PX; x++)
+            lit += get_px(fb, x, y);
+    assert(lit >= 0 && lit <= LCD_WIDTH_PX * LCD_HEIGHT_PX);
+    return lit;
+}
 
-    printf("executeNUT stopped: ret=%d, instructions=%d\n", ret, cptinstr);
-
-    hp41_display_compute_framebuffer(fb);
-
+static void print_framebuffer(const uint8_t *fb)
+{
+    assert(fb != NULL);
+    assert(LCD_WIDTH_PX % 8 == 0); /* get_px()'s byte/bit split relies on this */
     for (int y = 0; y < LCD_HEIGHT_PX; y++) {
         for (int x = 0; x < LCD_WIDTH_PX; x++)
             putchar(get_px(fb, x, y) ? '#' : '.');
         putchar('\n');
     }
-    int chars_lit = count_lit(fb);
-    printf("total lit pixels (chars only, lcd_ann==0 at coldstart): %d\n", chars_lit);
+}
 
-    /* Annunciator check: the boot screen above never lights lcd_ann, so
-     * exercise that path directly. Each bit, one at a time, should add
-     * exactly hp41_annunciator_pixel_count[i] pixels; all 12 at once
-     * should add exactly their sum (300, per the extraction - see
-     * font-tables/hp41_annunciator_pixel_map.json) with none overlapping
-     * each other or the character cells.
-     */
-    int fail = 0;
+/* Runs the ROM in fixed-size batches until it stops advancing or
+ * MAX_INSTR total instructions have run - see nut_smoke_test.c's
+ * run_until_settled() for the Rule 2 rationale (a fixed batch-count
+ * cap, not an open-ended "while (ret == 0)"). */
+static int run_until_settled(void)
+{
+    int ret = 0;
+    int batch;
+    for (batch = 0; batch < MAX_BATCHES; batch++) {
+        ret = executeNUT(BATCH_SIZE);
+        if (ret != 0 || cptinstr >= MAX_INSTR)
+            break;
+    }
+    assert(batch <= MAX_BATCHES);
+    assert(ret >= 0 && ret <= 3);
+    return ret;
+}
+
+/* Lights each annunciator bit one at a time and confirms it adds
+ * exactly its documented pixel count, then all 12 at once (confirming
+ * no overlap). Returns the number of mismatches found. */
+static int check_annunciators(uint8_t *fb, int chars_lit)
+{
+    assert(fb != NULL);
+    assert(chars_lit >= 0);
+    int failures = 0;
     int total_expected = 0;
+
     for (int i = 0; i < HP41_NUM_ANNUNCIATORS; i++) {
         lcd_ann = hp41_annunciator_bits[i];
         hp41_display_compute_framebuffer(fb);
-        int got = count_lit(fb) - chars_lit;
-        int want = hp41_annunciator_pixel_count[i];
+        const int got = count_lit(fb) - chars_lit;
+        const int want = hp41_annunciator_pixel_count[i];
         total_expected += want;
         printf("annunciator[%2d] bit=0x%03X: got %d px, want %d px%s\n",
                i, hp41_annunciator_bits[i], got, want,
                got == want ? "" : "  <-- MISMATCH");
-        if (got != want) fail = 1;
+        if (got != want) failures++;
     }
 
     lcd_ann = 0xFFF; /* all 12 annunciators on at once */
     hp41_display_compute_framebuffer(fb);
-    int all_got = count_lit(fb) - chars_lit;
+    const int all_got = count_lit(fb) - chars_lit;
     printf("all annunciators at once: got %d px, want %d px%s\n",
            all_got, total_expected,
            all_got == total_expected ? "" : "  <-- MISMATCH (overlap or gap)");
-    if (all_got != total_expected) fail = 1;
+    if (all_got != total_expected) failures++;
 
-    if (fail) {
+    return failures;
+}
+
+int main(void)
+{
+    uint8_t fb[LCD_FB_SIZE];
+
+    nut_boot();
+    assert(regPC == 0);
+    const int ret = run_until_settled();
+    assert(ret >= 0 && ret <= 3);
+    printf("executeNUT stopped: ret=%d, instructions=%d\n", ret, cptinstr);
+
+    hp41_display_compute_framebuffer(fb);
+    print_framebuffer(fb);
+    const int chars_lit = count_lit(fb);
+    printf("total lit pixels (chars only, lcd_ann==0 at coldstart): %d\n", chars_lit);
+
+    const int failures = check_annunciators(fb, chars_lit);
+
+    if (failures) {
         printf("FAIL: annunciator rendering doesn't match the pixel map\n");
         return 1;
     }

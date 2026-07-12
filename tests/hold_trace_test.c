@@ -24,71 +24,120 @@
  * it's the same underlying ROM mechanism (any function key's hold
  * check), driven correctly for the first time.
  *
- * Build (from repo root):
- *   cc -std=gnu11 -fcommon -Iemu41gcc -Ifirmware/emu41gcc_compat -Ifirmware \
- *      -include firmware/emu41gcc_compat/nut_stubs.h \
- *      -o tests/build/hold_trace_test tests/hold_trace_test.c \
- *      emu41gcc/nutcpu.c emu41gcc/display.c \
- *      firmware/emu41gcc_compat/nut_stubs.c \
- *      firmware/emu41gcc_compat/nut_globals.c \
- *      firmware/emu41gcc_compat/nut_rom.c \
- *      firmware/hp41_key_bridge.c \
- *      firmware/hp41_key_hold_bridge.c \
- *      roms/rom_images.c
- *   ./tests/build/hold_trace_test
+ * Build: make -C tests
  */
 
+#include <assert.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdbool.h>
 
 #define GLOBAL extern
 #include "nutcpu.h"
 
 #include "display.h"
-#include "nut_rom.h"
 #include "hp41_key_bridge.h"
 #include "hp41_key_hold_bridge.h"
+#include "nut_rom.h"
 
 #define NULT_LO 0x0E80
 #define NULT_HI 0x0ED9
 #define NULLIFY_ADDR 0x0ECF
+#define DISTOG_ADDR 0x0E9F  /* "blink the label" toggle */
+#define NULT10_LOOP_ENTRY 0x0EC9
+
+/* Power of 10, Rule 2: the settle-to-POWOFF loops below (cold boot, and
+ * each ON wake) are bounded by a fixed batch-count cap rather than an
+ * open-ended "while (ret == 0)", matching nut_smoke_test.c's
+ * run_until_settled() pattern - a real ROM lockup becomes a bounded
+ * failure (ret still 0 after SETTLE_MAX_BATCHES) instead of an
+ * unbounded hang.
+ *
+ * SETTLE_MAX_BATCHES has to be far larger than
+ * SETTLE_MAX_BATCHES*SETTLE_BATCH_SIZE instructions would suggest:
+ * executeNUT() (emu41gcc/nutcpu.c) breaks out of its own inner loop
+ * the instant fdsp (display-dirty) is set, which happens repeatedly
+ * during a real boot/wake sequence - nothing in this test clears fdsp
+ * between calls (unlike main.c's production loop), so once it's set,
+ * every later executeNUT(1000) call only ever advances cptinstr by 1
+ * before re-tripping the same break. Observed real requirement across
+ * cold boot + two ON wakes: ~7700 total instructions, almost entirely
+ * one per call once fdsp latches - this cap gives comfortable margin
+ * above that. */
+#define SETTLE_BATCH_SIZE 1000
+#define SETTLE_MAX_BATCHES 20000
 
 static void feed(const char *s)
 {
+    assert(s != NULL);
     for (; *s; s++)
         hp41_key_bridge_feed_byte((unsigned char)*s);
+    assert(*s == '\0');
 }
 
-/* Runs the calculator forward, waking it from POWOFF with the given key
- * sequence exactly like main.c's main loop does (see CLAUDE.md's
- * "Arduino display bridge" section, point 4). max_steps bounds how many
- * single instructions to execute; visited_nult/hit_nullify report
- * whether regPC ever entered the hold/nullify address range and
- * whether it specifically reached the nullify branch.
+/* Runs executeNUT() in fixed-size batches until it stops advancing
+ * (POWOFF/invalid/breakpoint/display-dirty) or SETTLE_MAX_BATCHES have
+ * run. Returns the last status code. */
+static int settle(void)
+{
+    int ret = 0;
+    int batch;
+    for (batch = 0; batch < SETTLE_MAX_BATCHES; batch++) {
+        ret = executeNUT(SETTLE_BATCH_SIZE);
+        if (ret != 0)
+            break;
+    }
+    assert(batch <= SETTLE_MAX_BATCHES);
+    assert(ret >= 0 && ret <= 3);
+    return ret;
+}
+
+/* Logs regPC/flagKB/regK the first time this trace visits each of the
+ * four addresses of interest, so the printed trace has one line per
+ * state transition rather than one per instruction. */
+static void log_pc_of_interest(int steps, unsigned int *last_logged_pc)
+{
+    assert(last_logged_pc != NULL);
+    assert(steps >= 0);
+    const bool interesting = (regPC == 0x0E9A || regPC == DISTOG_ADDR
+                               || regPC == NULT10_LOOP_ENTRY || regPC == NULLIFY_ADDR);
+    if (interesting && regPC != *last_logged_pc) {
+        printf("      step %6d: PC=0x%04X flagKB=%d regK=0x%02X\n", steps, regPC, flagKB, regK);
+        *last_logged_pc = regPC;
+    }
+}
+
+/* Runs the calculator forward, waking it from POWOFF with a previously
+ * fed key sequence exactly like main.c's main loop does (see
+ * CLAUDE.md's "Arduino display bridge" section, point 4). max_steps
+ * bounds how many single instructions to execute - a fixed, provable
+ * loop bound (Power of 10, Rule 2), since the for-loop below iterates
+ * at most max_steps times regardless of how `steps` itself advances.
+ * visited_nult/hit_nullify/hit_distog report whether regPC ever entered
+ * the hold/nullify address range and which specific addresses it hit.
  *
  * drain_interval models how often main.c actually notices an incoming
- * release byte, in instructions - a real release becomes "available"
- * at release_after_steps, but is only actually acted on at the next
+ * release byte, in instructions - a real release becomes "available" at
+ * release_after_steps, but is only actually acted on at the next
  * multiple of drain_interval at or past that point. drain_interval=1
  * matches the current (fixed) design - drain_usb_bytes() runs every
- * single inner-loop iteration. drain_interval=1000 reproduces the
- * earlier, buggy design - bytes were only drained once per
- * up-to-1000-instruction batch (see CLAUDE.md's "Real key hold-duration"
- * section for why that stretched every tap past the blink threshold).
+ * single inner-loop iteration.
  */
 static void run_and_trace2(int max_steps, int release_after_steps, int drain_interval,
-                           int *visited_nult, int *hit_nullify, int *hit_distog)
+                            int *visited_nult, int *hit_nullify, int *hit_distog)
 {
+    assert(max_steps > 0);
+    assert(drain_interval > 0);
+
     *visited_nult = 0;
     *hit_nullify = 0;
     *hit_distog = 0;
     int steps = 0;
     bool released = (release_after_steps < 0);
-    int nult10_hits = 0; /* how many times PC==0x0EC9 (NULT10 loop entry) */
-    int last_logged_pc = -1;
+    int nult10_hits = 0;
+    unsigned int last_logged_pc = (unsigned int)-1;
 
-    while (steps < max_steps) {
+    for (int iter = 0; iter < max_steps && steps < max_steps; iter++) {
         if (!released && steps >= release_after_steps && (steps % drain_interval) == 0) {
             hp41_key_hold_release();
             released = true;
@@ -97,25 +146,21 @@ static void run_and_trace2(int max_steps, int release_after_steps, int drain_int
         if (hp41_key_hold_active())
             hp41_key_hold_sustain();
 
-        int cptinstr_before = cptinstr;
-        int ret = executeNUT(1);
+        const int cptinstr_before = cptinstr;
+        const int ret = executeNUT(1);
         steps += (cptinstr - cptinstr_before);
 
         if (regPC >= NULT_LO && regPC <= NULT_HI) {
-            if (!*visited_nult) {
+            if (!*visited_nult)
                 printf("    first entered hold/nullify range at PC=0x%04X (step %d)\n", regPC, steps);
-            }
             *visited_nult = 1;
-            if (regPC == 0x0EC9)
+            if (regPC == NULT10_LOOP_ENTRY)
                 nult10_hits++;
             if (regPC == NULLIFY_ADDR)
                 *hit_nullify = 1;
-            if (regPC == 0x0E9F) /* DISTOG - the "blink the label" toggle */
+            if (regPC == DISTOG_ADDR)
                 *hit_distog = 1;
-            if (regPC != last_logged_pc && (regPC == 0x0E9A || regPC == 0x0E9F || regPC == 0x0EC9 || regPC == NULLIFY_ADDR)) {
-                printf("      step %6d: PC=0x%04X flagKB=%d regK=0x%02X\n", steps, regPC, flagKB, regK);
-                last_logged_pc = regPC;
-            }
+            log_pc_of_interest(steps, &last_logged_pc);
         }
 
         if (ret == 1) {
@@ -139,48 +184,112 @@ static void run_and_trace(int max_steps, int release_after_steps,
     run_and_trace2(max_steps, release_after_steps, 1, visited_nult, hit_nullify, hit_distog);
 }
 
-int main(void)
+/* Boots the ROM to its cold-start "MEMORY LOST" / POWOFF state, then
+ * presses ON twice - matches the real, previously-established behavior
+ * (see CLAUDE.md's "Screen goes blank" investigation): the first
+ * wake-restart still shows "MEMORY LOST" again (whatever Carry
+ * naturally ended up as isn't reset on wake, same as main.c), and a
+ * second ON is what actually reaches the ready "0.0000" state. */
+static void boot_and_wake_twice(void)
 {
-    int failures = 0;
-
     nut_boot();
-    /* Cold boot -> "MEMORY LOST" -> POWOFF, same as nut_smoke_test.c. */
-    int ret;
-    do {
-        ret = executeNUT(1000);
-    } while (ret == 0);
+    assert(regPC == 0);
+    int ret = settle();
+    assert(ret >= 0 && ret <= 3);
     printf("cold boot settled: ret=%d, PC=0x%04X, cptinstr=%d\n", ret, regPC, cptinstr);
 
-    /* Wake with ON, twice - matches the real, previously-established
-     * behavior (see CLAUDE.md's "Screen goes blank" investigation): the
-     * first wake-restart still shows "MEMORY LOST" again (whatever
-     * Carry naturally ended up as isn't reset on wake, same as main.c),
-     * and a second ON is what actually reaches the ready "0.0000"
-     * state. */
     char dispbuf[32];
     for (int on_press = 0; on_press < 2; on_press++) {
         regPC = 0;
         flagKey = 0;
         feed("[ON]");
-        do {
-            ret = executeNUT(1000);
-        } while (ret == 0);
+        ret = settle();
         printf("after ON #%d: display=\"%s\" PC=0x%04X ret=%d cptinstr=%d\n",
                on_press + 1, display_to_buf(dispbuf), regPC, ret, cptinstr);
     }
+}
 
-    /* Held key is 'A' (Sigma+, tabcode 0x10) rather than a digit - the
-     * hold/nullify logic under test is specifically about deciding
-     * whether to run a *function*; plain digit entry (building up a
-     * number in the X register) is a different, simpler code path and
-     * may never route through it at all. Sent via the real "[+X]"/"[-]"
-     * wire protocol (hp41_key_bridge_feed_byte()), exactly what
-     * production code (main.c, the GUI) will actually send - not the
-     * hold-bridge API directly, so this is a genuine integration test
-     * of the parser too. */
-
+/* Instantaneous tap: release on literally the first single-stepped
+ * instruction after the press. On real hardware, a genuinely quick tap
+ * shouldn't show the "blink the label" toggle (DISTOG) at all - it
+ * should execute immediately. Returns 1 on failure. */
+static int scenario_instant_tap(void)
+{
     int visited, nullified, distogged;
 
+    printf("\nScenario 0: instantaneous tap of Sigma+ ('A')\n");
+    regPC = 0;
+    flagKey = 0;
+    feed("[+A]");
+    run_and_trace(3000, 1, &visited, &nullified, &distogged);
+    assert(visited == 0 || visited == 1);
+    assert(distogged == 0 || distogged == 1);
+    printf("    visited hold range=%d, hit DISTOG (blink)=%d, reached nullify=%d\n",
+           visited, distogged, nullified);
+    if (distogged) {
+        printf("    FAIL: an instantaneous tap should not trigger the label blink\n");
+        return 1;
+    }
+    return 0;
+}
+
+/* Quick tap: press and release almost immediately (well under the
+ * ROM's real ~0.5s threshold). May or may not visit the hold-check
+ * range at all, but must NOT reach the nullify branch. Returns 1 on
+ * failure. */
+static int scenario_quick_tap(void)
+{
+    int visited, nullified, distogged;
+
+    printf("\nScenario 1: quick tap of Sigma+ ('A')\n");
+    regPC = 0;
+    flagKey = 0;
+    feed("[+A]");
+    run_and_trace(3000, 50, &visited, &nullified, &distogged);
+    assert(visited == 0 || visited == 1);
+    assert(nullified == 0 || nullified == 1);
+    printf("    visited hold range=%d, hit DISTOG (blink)=%d, reached nullify=%d\n",
+           visited, distogged, nullified);
+    if (nullified) {
+        printf("    FAIL: a 50-instruction tap should not nullify\n");
+        return 1;
+    }
+    return 0;
+}
+
+/* Long hold: press and never release within this trace window. Should
+ * reach the nullify branch if held long enough to exceed the ROM's own
+ * loop-count threshold. Returns the number of failed checks (0, 1, or
+ * 2). */
+static int scenario_long_hold(void)
+{
+    int visited, nullified, distogged;
+    int failures = 0;
+
+    printf("\nScenario 2: long hold of Sigma+ ('A', never released)\n");
+    regPC = 0;
+    flagKey = 0;
+    feed("[+A]");
+    run_and_trace(400000, -1, &visited, &nullified, &distogged);
+    assert(visited == 0 || visited == 1);
+    assert(nullified == 0 || nullified == 1);
+    printf("    visited hold range=%d, hit DISTOG (blink)=%d, reached nullify=%d\n",
+           visited, distogged, nullified);
+    if (!visited) {
+        printf("    FAIL: a long, never-released hold should visit the hold/nullify range\n");
+        failures++;
+    }
+    if (!nullified) {
+        printf("    FAIL: a long, never-released hold should reach the nullify branch\n");
+        failures++;
+    }
+    feed("[-]");
+    assert(failures >= 0 && failures <= 2);
+    return failures;
+}
+
+int main(void)
+{
     /* NOTE: an earlier version of this test tried to reproduce a
      * suspected "batched USB byte drain" bug here (checking release
      * only once per 1000-instruction batch, matching an earlier version
@@ -194,58 +303,21 @@ int main(void)
      * hold-duration" section for the actual fix (a press/hold-engage
      * threshold in the GUI itself, tools/hp41_keyboard_gui.py). This
      * file still verifies the ROM-level mechanism is correct - see the
-     * scenarios below - just not that specific (disproven) hypothesis. */
+     * scenarios below - just not that specific (disproven) hypothesis.
+     *
+     * Held key is 'A' (Sigma+, tabcode 0x10) rather than a digit - the
+     * hold/nullify logic under test is specifically about deciding
+     * whether to run a *function*; plain digit entry is a different,
+     * simpler code path. Sent via the real "[+X]"/"[-]" wire protocol,
+     * exactly what production code (main.c, the GUI) actually sends. */
 
-    /* --- Scenario 0: instantaneous tap - release on literally the
-     * first single-stepped instruction after the press. This is the
-     * case the user reported: on real hardware, a genuinely quick tap
-     * shouldn't show the "blink the label" toggle (DISTOG, 0x0E9F) at
-     * all - it should execute immediately. --- */
-    printf("\nScenario 0: instantaneous tap of Sigma+ ('A')\n");
-    regPC = 0;
-    flagKey = 0;
-    feed("[+A]");
-    run_and_trace(3000, 1 /* release after the very first instruction */, &visited, &nullified, &distogged);
-    printf("    visited hold range=%d, hit DISTOG (blink)=%d, reached nullify=%d\n", visited, distogged, nullified);
-    if (distogged) {
-        printf("    FAIL: an instantaneous tap should not trigger the label blink\n");
-        failures++;
-    }
+    boot_and_wake_twice();
 
-    /* --- Scenario 1: quick tap - press and release almost immediately
-     * (well under the ROM's real ~0.5s threshold). Should execute
-     * normally; may or may not visit the hold-check range at all (a
-     * fast enough release might not even be sampled), but must NOT
-     * reach the nullify branch. --- */
-    printf("\nScenario 1: quick tap of Sigma+ ('A')\n");
-    regPC = 0;
-    flagKey = 0;
-    feed("[+A]");
-    run_and_trace(3000, 50 /* release after ~50 instructions - a very quick tap */, &visited, &nullified, &distogged);
-    printf("    visited hold range=%d, hit DISTOG (blink)=%d, reached nullify=%d\n", visited, distogged, nullified);
-    if (nullified) {
-        printf("    FAIL: a 50-instruction tap should not nullify\n");
-        failures++;
-    }
-
-    /* --- Scenario 2: long hold - press and never release within this
-     * trace window. Should reach the nullify branch (0x0ECF) if held
-     * long enough to exceed the ROM's own loop-count threshold. --- */
-    printf("\nScenario 2: long hold of Sigma+ ('A', never released)\n");
-    regPC = 0;
-    flagKey = 0;
-    feed("[+A]");
-    run_and_trace(400000, -1 /* never release */, &visited, &nullified, &distogged);
-    printf("    visited hold range=%d, hit DISTOG (blink)=%d, reached nullify=%d\n", visited, distogged, nullified);
-    if (!visited) {
-        printf("    FAIL: a long, never-released hold should visit the hold/nullify range\n");
-        failures++;
-    }
-    if (!nullified) {
-        printf("    FAIL: a long, never-released hold should reach the nullify branch\n");
-        failures++;
-    }
-    feed("[-]");
+    const int failures = scenario_instant_tap()
+                        + scenario_quick_tap()
+                        + scenario_long_hold();
+    assert(failures >= 0);
+    assert(failures <= 4); /* 1 + 1 + 2, see each scenario's own cap */
 
     if (failures) {
         printf("\nFAIL: %d check(s) failed\n", failures);
