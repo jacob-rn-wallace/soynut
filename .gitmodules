@@ -1,0 +1,3 @@
+[submodule "emu41gcc"]
+	path = emu41gcc
+	url = https://github.com/mmoller2k/emu41gcc.git

@@ -1,0 +1,391 @@
+{
+  "_description": "HP-41 14-segment + punctuation pixel mapping for the NHD-14432WG 144x32 GDRAM, extracted from display-mockups/NHD14432_Mockup_AllSegments_colored_v3.png",
+  "source_image": "display-mockups/NHD14432_Mockup_AllSegments_colored_v3.png",
+  "image_size": [
+    144,
+    32
+  ],
+  "num_character_cells": 12,
+  "cell_width_px": 12,
+  "cell_height_px": 32,
+  "coordinate_convention": "Each segment's pixel list is [x,y] local to a character cell's top-left corner (x: 0..cell_width_px-1, y: 0..cell_height_px-1, same for every cell). To render character cell i (0-11), offset x by i*cell_width_px to get absolute GDRAM column; y is already absolute (0-31) since cells span the full display height.",
+  "segment_bit_order_ref": [
+    "top",
+    "upper_left_vert",
+    "upper_right_vert",
+    "upper_left_diag",
+    "upper_right_diag",
+    "upper_center_vert",
+    "mid_left",
+    "mid_right",
+    "lower_left_vert",
+    "lower_right_vert",
+    "lower_left_diag",
+    "lower_right_diag",
+    "lower_center_vert",
+    "bottom"
+  ],
+  "notes": "Annunciator row (y=21-25, black in source mockup) intentionally excluded - not part of this segment map. Measured mockup colors differ slightly from the assignment table (see color_match_diagnostics) but match uniquely and unambiguously to one segment each; likely a PNG color-profile/gamma shift from the mockup tool, not a data issue.",
+  "segments": {
+    "top": [
+      [
+        2,
+        7
+      ],
+      [
+        3,
+        7
+      ],
+      [
+        4,
+        7
+      ],
+      [
+        5,
+        7
+      ],
+      [
+        6,
+        7
+      ]
+    ],
+    "bottom": [
+      [
+        2,
+        17
+      ],
+      [
+        3,
+        17
+      ],
+      [
+        4,
+        17
+      ],
+      [
+        5,
+        17
+      ],
+      [
+        6,
+        17
+      ]
+    ],
+    "upper_left_vert": [
+      [
+        1,
+        8
+      ],
+      [
+        1,
+        9
+      ],
+      [
+        1,
+        10
+      ],
+      [
+        1,
+        11
+      ]
+    ],
+    "upper_right_vert": [
+      [
+        7,
+        8
+      ],
+      [
+        7,
+        9
+      ],
+      [
+        7,
+        10
+      ],
+      [
+        7,
+        11
+      ]
+    ],
+    "lower_left_vert": [
+      [
+        1,
+        13
+      ],
+      [
+        1,
+        14
+      ],
+      [
+        1,
+        15
+      ],
+      [
+        1,
+        16
+      ]
+    ],
+    "lower_right_vert": [
+      [
+        7,
+        13
+      ],
+      [
+        7,
+        14
+      ],
+      [
+        7,
+        15
+      ],
+      [
+        7,
+        16
+      ]
+    ],
+    "upper_center_vert": [
+      [
+        4,
+        8
+      ],
+      [
+        4,
+        9
+      ],
+      [
+        4,
+        10
+      ],
+      [
+        4,
+        11
+      ]
+    ],
+    "lower_center_vert": [
+      [
+        4,
+        13
+      ],
+      [
+        4,
+        14
+      ],
+      [
+        4,
+        15
+      ],
+      [
+        4,
+        16
+      ]
+    ],
+    "upper_left_diag": [
+      [
+        2,
+        8
+      ],
+      [
+        2,
+        9
+      ],
+      [
+        3,
+        10
+      ],
+      [
+        3,
+        11
+      ]
+    ],
+    "upper_right_diag": [
+      [
+        5,
+        10
+      ],
+      [
+        5,
+        11
+      ],
+      [
+        6,
+        8
+      ],
+      [
+        6,
+        9
+      ]
+    ],
+    "mid_left": [
+      [
+        2,
+        12
+      ],
+      [
+        3,
+        12
+      ]
+    ],
+    "mid_right": [
+      [
+        5,
+        12
+      ],
+      [
+        6,
+        12
+      ]
+    ],
+    "lower_left_diag": [
+      [
+        2,
+        15
+      ],
+      [
+        2,
+        16
+      ],
+      [
+        3,
+        13
+      ],
+      [
+        3,
+        14
+      ]
+    ],
+    "lower_right_diag": [
+      [
+        5,
+        13
+      ],
+      [
+        5,
+        14
+      ],
+      [
+        6,
+        15
+      ],
+      [
+        6,
+        16
+      ]
+    ],
+    "dot_top": [
+      [
+        9,
+        8
+      ],
+      [
+        9,
+        9
+      ],
+      [
+        10,
+        8
+      ],
+      [
+        10,
+        9
+      ]
+    ],
+    "dot_bottom": [
+      [
+        9,
+        16
+      ],
+      [
+        9,
+        17
+      ],
+      [
+        10,
+        16
+      ],
+      [
+        10,
+        17
+      ]
+    ],
+    "comma_tail": [
+      [
+        9,
+        19
+      ],
+      [
+        10,
+        18
+      ]
+    ]
+  },
+  "color_match_diagnostics": {
+    "top": {
+      "table_hex": "E6194B",
+      "measured_hex": "#EE345D"
+    },
+    "bottom": {
+      "table_hex": "3CB44B",
+      "measured_hex": "#46BD5D"
+    },
+    "upper_left_vert": {
+      "table_hex": "0082C8",
+      "measured_hex": "#0096D2"
+    },
+    "upper_right_vert": {
+      "table_hex": "F58230",
+      "measured_hex": "#F9953E"
+    },
+    "lower_left_vert": {
+      "table_hex": "911EB4",
+      "measured_hex": "#A43CC1"
+    },
+    "lower_right_vert": {
+      "table_hex": "46F0F0",
+      "measured_hex": "#4FF1F3"
+    },
+    "upper_center_vert": {
+      "table_hex": "F032E6",
+      "measured_hex": "#F657EB"
+    },
+    "lower_center_vert": {
+      "table_hex": "808000",
+      "measured_hex": "#929000"
+    },
+    "upper_left_diag": {
+      "table_hex": "AA6E28",
+      "measured_hex": "#BA8134"
+    },
+    "upper_right_diag": {
+      "table_hex": "800000",
+      "measured_hex": "#941100"
+    },
+    "mid_left": {
+      "table_hex": "AAFFC3",
+      "measured_hex": "#B6FCCE"
+    },
+    "mid_right": {
+      "table_hex": "FFE119",
+      "measured_hex": "#FFE41D"
+    },
+    "lower_left_diag": {
+      "table_hex": "646464",
+      "measured_hex": "#777777"
+    },
+    "lower_right_diag": {
+      "table_hex": "B4B4B4",
+      "measured_hex": "#C1C1C1"
+    },
+    "dot_top": {
+      "table_hex": "000080",
+      "measured_hex": "#011993"
+    },
+    "dot_bottom": {
+      "table_hex": "F0F000",
+      "measured_hex": "#F3F000"
+    },
+    "comma_tail": {
+      "table_hex": "FFBEC8",
+      "measured_hex": "#FFCBD2"
+    }
+  }
+}

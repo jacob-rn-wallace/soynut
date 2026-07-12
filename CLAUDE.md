@@ -1,0 +1,790 @@
+# HP-41CV Replica Project — Soynut
+
+Real Nut CPU emulation running on a Raspberry Pi Pico 2, driving a real
+NHD-14432WG 144x32 graphic LCD wired to look and behave like the
+original HP-41 display, with keypresses coming from a computer over USB
+serial for now (a physical keyboard is a possible future step).
+
+This is the stable reference doc: confirmed architecture, current
+hardware/software state, and build/run instructions — read this first,
+whether you're a person or a Claude instance picking up this repo cold.
+Session-by-session development history (the debugging trails, dead ends,
+and reasoning that led here) lives in `DEVLOG.md`, which is gitignored
+and local-only — it isn't needed to build or understand the system as
+it stands today, but is kept around in case a similar bug resurfaces and
+the prior investigation is useful.
+
+**License:** GPL-2.0-or-later (see `LICENSE`) — matches `emu41gcc`'s own
+terms exactly, since `firmware/` statically links its code into one
+binary. **The HP-41 ROM firmware images are not included and are not
+ours to redistribute** — see "ROM images" below for how to supply your
+own.
+
+## Current status
+
+Confirmed working end-to-end on real hardware: the real HP-41 ROM boots
+on the Pico 2, correctly shows `MEMORY LOST` on cold start, accepts
+keypresses via a USB-serial protocol (typed by hand, or via the included
+clickable on-screen keyboard GUI), and drives the physical LCD via an
+Arduino Uno display bridge. Press-and-hold key behavior (USER-mode label
+flash / nullify-on-long-hold) is implemented and confirmed. The
+calculator auto-powers-off after each keypress the same way the real ROM
+timeout logic does — see "Known unknowns" for what's still open.
+
+The direct Pico→LCD serial link (no Arduino in between) is implemented,
+protocol-verified, but not yet lit up on real hardware — parked pending
+a better level shifter. See "Direct Pico→LCD serial link" below.
+
+## Hardware
+
+- **Display:** Newhaven NHD-14432WG-BTFH-VT, ST7920 controller, 144x32
+  graphic LCD. Supports both 8-bit parallel and 3-wire serial
+  (`/CS`/`SID`/`SCLK`) interfaces, selected by an onboard jumper (J3
+  shorted/J4 open = parallel, the board's default; J4 shorted/J3 open =
+  serial) — not a wire from the MCU, so switching modes means physically
+  moving the jumper. Full 16-pin connector: `VSS`, `VDD`, `VO` (contrast
+  — explicitly "Do Not Connect" on this fixed-contrast variant), then
+  either `RS`/`R/W`/`E`/`DB0-DB7` (parallel) or `/CS`/`SID`/`SCLK` (serial,
+  pins 7-14 tied to GND), then `LED+`/`LED-`. No PSB or RST pin exists on
+  this connector. In parallel mode `E` is falling-edge triggered.
+- **MCU:** Raspberry Pi Pico 2 (RP2350), raw Pico C SDK (not
+  Arduino-style) — chosen over an Arduino Uno prototype because the
+  emulator needs far more RAM/flash than an Uno has (Uno: 2KB SRAM/32KB
+  flash; Pico 2: 520KB SRAM, 2-4MB flash).
+- **Backlight:** intentionally disconnected — the real HP-41C has none.
+- **CS polarity:** the LCD module's own datasheet
+  (`reference-material/datasheets/NHD-14432WG-BTFH-VT.pdf`) says "Active
+  LOW Chip Select," but the real ST7920 controller datasheet
+  (`reference-material/datasheets/ST7920.pdf`) confirms active-**HIGH**
+  three separate ways (pin table, serial timing diagram, and its own
+  8051 reference code) — a genuine conflict between the two vendor
+  documents, resolved in favor of the controller datasheet. `st7920.c`'s
+  `LCD_CS_ACTIVE_LOW` is `0` (active-high) to match.
+- **GDRAM addressing:** vertical address 0-31 maps directly to y=0-31,
+  9 words/row, no bank-fold — confirmed both against a separately
+  hardware-validated Arduino reference implementation and, on the direct
+  serial link, via full logic-analyzer capture (every GDRAM write
+  decoded and cross-checked). `st7920_draw_frame()`/`st7920_clear()`
+  implement this.
+- **Level shifting:** required — `VDD` is 5V and the logic-high input
+  threshold (0.7×VDD ≈ 3.5V) is above the Pico's ~3.3V GPIO output high.
+  The available level shifter (a RobotDyn "Logic Level Converter,
+  Bi-Direction," BSS138-based, auto-sensing — pinout in
+  `reference-material/datasheets/20171225012850PINOUT-LogLevel.pdf`) has
+  only 4 channels, enough for 3-wire serial (`/CS`/`SID`/`SCLK`) but not
+  8-bit parallel (10 signals: `RS`/`E`/`DB0-7`) — this is why the LCD is
+  jumpered to serial mode. If a parallel or actively-driven direct link
+  is ever revisited, a **74LVC245/74HCT245** (octal transceiver,
+  fixed `DIR`/`OE`) or **74HCT244** (octal buffer, inherently
+  unidirectional) is recommended over another passive auto-sensing
+  shifter — every signal in this design is one-directional (`R/W` is
+  permanently tied low), so an actively push-pull-driven chip removes
+  the rise-time question entirely. Two chips are needed for parallel's
+  10 signals (8 channels/chip).
+- `firmware/pins.h` has the full pin-by-pin wiring table (LCD, level
+  shifter, Arduino UART link, Pico power pins) — confirm/edit against
+  actual wiring before flashing; the exact GPIO assignments are not
+  carried over from any external known-working prototype.
+
+## ROM images — bring your own
+
+**The ROM files themselves are not in this repo, and never should be.**
+They're HP's copyrighted HP-41 calculator firmware, not open source —
+this project has no rights to redistribute them, regardless of the
+license on the emulator/replica code itself. `roms/*.ROM`, `roms/*.rom`,
+and the generated `roms/rom_images.c` are all gitignored. See
+`roms/README.md` for the full BYO process; short version:
+
+- Only `NUT0.ROM`/`NUT1.ROM`/`NUT2.ROM` (the base HP-41 OS, 3 pages) are
+  wired into the build. Supply your own legally-obtained copies (e.g.
+  dumped from a physical calculator you own, or extracted from emulator
+  software you're licensed to use), place them in `roms/`, then run
+  `python3 roms/rom_to_c.py NUT0.ROM NUT1.ROM NUT2.ROM > roms/rom_images.c`
+  to (re)generate the C source the build actually compiles.
+- **Format:** each file must be 8192 bytes = 4096 words, **big-endian
+  uint16_t**, values 0-0x3FF (10-bit words in 16-bit slots, unpacked).
+  Matches `emu41gcc/nutcpu.c`'s `tabpage[16]` structure exactly (`short*`
+  arrays, page = top 4 bits of a 16-bit address, offset = low 12 bits) —
+  no translation needed beyond the endian swap. `roms/check_rom_format.py`
+  is a standalone sanity-checker if you want to verify a file/its byte
+  order first.
+- Expansion ROMs (`XNUT0-2.ROM`, `CXFUNS0-1.ROM`, `ADV0-2.ROM`,
+  `TIMER.ROM`, `PRINTER.ROM`, `CrdRdr-1E.rom`) aren't wired into the
+  build yet (no plug-in-module support), but the same BYO/format rules
+  would apply if that's added later.
+
+## The Nut CPU core: `emu41gcc/`
+
+`emu41gcc` (GPL-2.0-or-later gcc port of J-F Garnier's original DOS-era
+Emu41) is the emulation core this project adapts, not a from-scratch
+build — and it's a **git submodule** pointing at the upstream repo
+(`github.com/mmoller2k/emu41gcc`), pinned to a specific commit, rather
+than a vendored copy of its files. This isn't just tidiness: a submodule
+makes the "never edit it" rule below structural rather than just a doc
+convention — there's no way to change anything inside it from a commit
+in this repo at all; you'd have to `cd emu41gcc`, commit there against
+the upstream remote, and then update this repo's submodule pointer,
+which is a deliberate, visible, separate action.
+
+**Cloning this repo:** `git clone --recurse-submodules <this repo's URL>`
+(or, if already cloned without that flag: `git submodule update --init`).
+
+**Hard rule: `emu41gcc/` is a black box. Never edit any file inside it**
+— not a one-line fix, not a portability shim. All build-compatibility
+work (missing DOS headers, missing printer/timer/HPIL prototypes, stub
+globals, `-fcommon` link fixes) lives in `firmware/emu41gcc_compat/` and
+is wired in purely from `firmware/CMakeLists.txt` (include-path shims,
+`-include` force-includes, per-file compiler flags — see "Firmware"
+below). If a future change seems to require touching a file in
+`emu41gcc/`, find another adapter-layer trick instead.
+
+**Licensing note:** `emu41gcc`'s own files grant "version 2 of the
+License, or (at your option) any later version" (see its `COPYING.TXT`
+and e.g. `emu41.c`'s header) — i.e. GPL-2.0-or-later, not GPL-2.0-only.
+Since `firmware/` statically links `nutcpu.c`/`display.c` into one
+binary, the resulting firmware is a combined work under GPL's copyleft
+terms; this project's own code is licensed GPL-2.0-or-later to match
+exactly (see `LICENSE` at the repo root) rather than leave any
+compatibility ambiguity.
+
+**Key structures** (`nutcpu.h`): `tabpage[16]` (ROM page pointers),
+`typmod[16]` (module type per page, 1=ROM), `espaceRAM[8200]`
+(calculator RAM), registers (`regA/B/C/M/N[14]`, `regPC`, `regST`, etc.),
+`int executeNUT(int n)` (main entry point — runs n instructions, returns
+0=OK/1=POWOFF/2=invalid opcode/3=breakpoint).
+
+**Opcode dispatch** (`nutcpu.c`, 1525 lines): `executeNUT(n)` fetches
+the word at `regPC`, dispatches on `mot&3` to `exec0()` (NOP, WMLDL,
+ENROM1-4, status/flag bits, `LC h`, register moves, `SELPF`, `CXISA`,
+RTN variants, POWOFF, DISOFF/DISTOG), `exec1()` (two-word absolute
+jump/call), `exec2()` (register/arithmetic — field-selector + ~30 ops;
+add/subtract branch decimal-vs-hex via `flagdec`, the real mechanism
+behind the HP-41's decimal/hex modes), or `exec3()` (single-word
+relative branch) — or `execp()` instead if a prior `SELPF` set
+`smartp=1` (HP-IL/HP82143-printer peripheral dispatch; not needed for
+base HP-41CV bring-up, but its call signatures pin down the stub
+functions below).
+
+**Important:** `nutcpu.c` has two `executeNUT()` definitions gated on
+`#ifdef VERS_ASM`. **Never define `VERS_ASM`** when building for the
+Pico — the `#else` branch calls an external x86-assembly
+`executeNUT2()` (`nutcpu2.asm`, not in this repo, not portable to ARM);
+the plain-C `#ifndef VERS_ASM` branch is complete and sufficient on its
+own (several opcode groups — LC, PT ops, SELPF, N/STK ops, CXISA, RCR,
+`popaddr`/`pushaddr` — are themselves only compiled in that branch).
+
+**Keyboard:** `dokey()` is the state machine every keyboard-facing
+opcode (`CHKKB`/`RSTKB`/`C=KEYS`) funnels through
+(`flagKB`/`flagKey`/`cptKey`/`regK`/`keybuffer[]`/`lgkeybuf`, all plain
+externals via `nutcpu.h`'s `GLOBAL` macro). Injecting a keypress is just
+appending to `keybuffer[lgkeybuf++]` (an 8-bit row/column code). By
+default every `keybuffer[]` entry becomes a fixed ~200-instruction
+"pressed" pulse, decoupled from real hold duration — see "Key
+hold-duration" below for how this project drives real press/release
+timing anyway, without touching `dokey()` itself (a same-file
+`#define`-rename override was tried and found structurally impossible:
+`dokey()`'s 3 call sites are all inside `nutcpu.c`, so a textual rename
+hits the callers identically and can't selectively redirect them).
+
+**Display:** `display.h`/`display.c` hold three parallel 12-nibble shift
+registers (`lcd_a`, `lcd_b`, `lcd_c`), one set per of the 12 display
+character positions: `code = (lcd_c[i]<<8) | ((lcd_b[i]&3)<<4) |
+lcd_a[i]` (10-bit char code), `punct = lcd_b[i]>>2` (2-bit:
+0=blank/1=period/2=colon/3=comma). Index 11 is the **leftmost** screen
+position (index 0 is rightmost). Do **not** use the reference
+`alpha41()`/`display_to_buf()` — those produce rough ASCII for a text
+console; this project decodes to real segment shapes instead (see
+"Display bridge" below). The annunciator row is `lcd_ann` (see
+`ann_to_buf()` for its bit layout: `BAT`/`USER`/`G`/`RAD`/`SHIFT`/
+program-step digits `0`-`4`/`PRGM`/`ALPHA`).
+
+**Peripheral stubs:** `timer.h`/`hpil.h`/printer functions
+(`hpil_wr`/`hpil_rd`/`print_char`/`get_printer_status`/
+`test_printer_flag`/`timer_wr_n`/`timer_rd_n`) all no-op/return 0 —
+correct for a base HP-41CV with no clock/HP-IL/printer module plugged
+in.
+
+## Font / display segment tables
+
+- 14 real character segments + 3 punctuation marks per position (top,
+  upper/lower-left/right vertical/diagonal, upper/lower-center vertical,
+  mid-left/right horizontal, bottom; plus top-dot/bottom-dot/comma-tail)
+  — matches the official spec. HP-41 display character codes are plain
+  ASCII for the printable range (32-127); codes 128-255 mirror 0-127 (the
+  high bit is a printer-control flag, not a different glyph).
+- `font-tables/hp41_font_table.json`/`.txt`: all 128 codes, each a
+  14-bit segment-on/off string. Codes 32-127 are validated **except**
+  codes 102-125 (`f`-`z` minus `a`-`e`, plus `{`/`|`/`}`), which share
+  the same "all segments on" extraction-failure sentinel as codes 0-31
+  and are rendered blank rather than garbled.
+  `font-tables/gen_display_tables.py` detects this by value (any
+  all-1s bit string), not by range. If real glyphs for that range are
+  ever needed, they need re-extraction — see
+  `reference-material/font-tables-source/` for the original design
+  files, and `reference-material/display-mockups/` for the mockups the
+  original (working) extraction was done from.
+- Segment bit order:
+  `top, upper_left_vert, upper_right_vert, upper_left_diag, upper_right_diag,
+  upper_center_vert, mid_left, mid_right, lower_left_vert, lower_right_vert,
+  lower_left_diag, lower_right_diag, lower_center_vert, bottom`
+- `font-tables/hp41_pixel_segment_map.json`: which actual GDRAM pixels
+  correspond to each named segment, for this 144x32 display. Each
+  segment name maps to `[x,y]` pixel offsets local to a character cell's
+  top-left corner (x: 0-11, y: 0-31 absolute; add `i*12` to x for cell
+  *i*, 0-11). The annunciator row (y=21-25) is excluded from this map —
+  it's handled separately below.
+- `font-tables/hp41_annunciator_pixel_map.json`: the 12 `lcd_ann` bits'
+  **absolute** GDRAM pixels (not per-cell — each annunciator is a single
+  static label, not a shared-geometry glyph).
+- Punctuation-column pixels (`dot_top`/`dot_bottom`/`comma_tail`) have
+  not been cross-checked against a rendered real colon/period/comma the
+  way the printable characters were — worth a sanity pass before fully
+  relying on them.
+
+`font-tables/gen_display_tables.py` compiles the three JSON sources
+above into `font-tables/hp41_display_tables.h`/`.c` (checked in and
+regenerable): `hp41_char_segments[128]`, a flattened
+`hp41_segment_pixels[]`/`_pixel_offset[17]`/`_pixel_count[17]` (17 = 14
+segments + 3 punctuation marks), and the equivalent
+`hp41_annunciator_bits[12]`/`_pixels[]`/`_pixel_offset[12]`/
+`_pixel_count[12]`. The same script's `--avr` mode emits a PROGMEM
+version of the same tables for the Arduino side
+(`Arduino NHD14432/NHD14432_DisplayBridge/hp41_display_tables_avr.h`),
+from one shared parse of the same JSON — the two can't drift apart in
+content.
+
+## Display bridge — `firmware/hp41_display_bridge.h`/`.c`
+
+- `hp41_display_compute_framebuffer(uint8_t *fb)` — pure logic, no
+  hardware access. Reads `emu41gcc/display.c`'s `lcd_a`/`lcd_b`/`lcd_c`/
+  `lcd_ann` globals directly (declared `extern` here, no header exposes
+  them), decodes each of the 12 positions' raw code to ASCII
+  (`hp41_decode_ascii()` — re-derived from `display.c`'s static
+  `alpha41()`, which is nontrivial: the 3 registers pack a sparse 0-63 ∪
+  256-319 value, not a clean 7-bit range), and plots lit
+  segments/punctuation/annunciators into `fb` (144x32, 1bpp, row-major,
+  MSB-first).
+- `hp41_display_render(void)` — the above, plus `st7920_draw_frame()` to
+  push it to hardware directly (used only if the direct-drive path is
+  active — see below; the live path instead sends raw display state to
+  the Arduino bridge).
+- Verified via `tests/display_bridge_test.c`: boots the ROM, computes
+  the framebuffer (never touches real hardware — a no-op
+  `st7920_draw_frame()` stub is defined locally), and checks the
+  "MEMORY LOST" cold-start render's lit-pixel count against an
+  independently-computed expectation (207, exact match) — confirms cell
+  ordering, ASCII decode, and segment-to-pixel plotting all at once (an
+  exact match also proves no two simultaneously-lit segments ever
+  overlap a pixel). The same test pokes `lcd_ann` directly (per-bit and
+  all-12-at-once) and checks each expected pixel count exactly.
+
+## Key bridge — `firmware/hp41_key_bridge.h`/`.c`
+
+Translates incoming USB serial bytes into presses on `keybuffer[]`/
+`lgkeybuf` (drained by `dokey()` exactly like a real keyboard scan).
+Pure logic — `hp41_key_bridge_feed_byte(int c)` is the whole API, plus
+`hp41_key_bridge_reset()` for deterministic/test-isolated state.
+
+- **Direct ASCII keys:** a 128-entry `tabcode[]` table (sourced
+  unchanged from `emu41gcc/emu41.c`'s `traite_touche()` — only this one
+  data table was copied out, not the DOS console app it lives in) maps
+  most bytes straight to an HP-41 keycode: digits, `+-*/`, letters
+  (ALPHA mode), Enter (CR/LF), Backspace (→ CLX), ctrl-A/R/X (→
+  ALPHA/R-S/XEQ).
+- **Named keys with no ASCII equivalent** (`ON`, `SHIFT`, `USER`,
+  `PRGM`, `SST`, `BST`, `X<>Y`, `RDN`): sent as `[NAME]`
+  (case-insensitive) — `[` is safe to repurpose as an escape character
+  since `tabcode[]` maps it to 0 (no real key produces it). `BST` has no
+  dedicated keycode on real hardware (it's SHIFT+SST) and is sent as
+  that literal two-key sequence. Malformed sequences (unrecognized
+  name, unterminated `[`, nested `[`) all recover cleanly via an
+  explicit `STATE_OVERFLOW`/restart-on-new-`[` handling rather than
+  misfiring partial names as raw keypresses.
+- `keybuffer[]`'s 8-slot cap matches `emu41gcc`'s own `push_key()` —
+  extra presses beyond 8 pending are silently dropped.
+- Verified via `tests/key_bridge_test.c` (17 checks, including
+  adversarial malformed-bracket input).
+
+### Press-and-hold — `firmware/hp41_key_hold_bridge.h`/`.c`
+
+The real HP-41 nullifies a key if held too long (~1245 throttled
+instructions / ~6ms at this project's throttle rate — see the Owner's
+Handbook's USER-mode "hold to see label, hold too long to cancel"
+behavior), which the ROM detects by polling `CHKKB` in a decrementing
+counter loop (confirmed via ROM disassembly — see `NLT010`/`NULT10`
+labels around `0x0E97`-`0x0ED7`, cross-referenced against
+`SYSTEMLABELS.TXT`). Since `dokey()` can't be overridden (see above),
+this project instead sustains the state directly from outside:
+
+- `hp41_key_hold_press(keycode)` — pushes the keycode into `keybuffer[]`
+  and begins tracking a hold.
+- `hp41_key_hold_release()` — ends it.
+- `hp41_key_hold_sustain()` — while a hold is active, forcibly
+  re-asserts `flagKB=1`/`regK=<held keycode>` every call; a no-op
+  otherwise.
+- `firmware/main.c`'s main loop single-steps `executeNUT(1)` (not the
+  normal 1000-instruction batch) while a hold is active, calling
+  `hp41_key_hold_sustain()` before every single instruction — required
+  because the ROM's hold-check loop clears and re-reads `flagKB` within
+  a handful of instructions each iteration. Only the `executeNUT()` call
+  itself is single-stepped; USB byte-draining and the heartbeat/pacing
+  overhead still run at their normal cadence, so holding a key doesn't
+  otherwise slow the system down.
+
+**Wire protocol extension** (`firmware/hp41_key_bridge.c`, additive to
+`[NAME]` above): `"[+X]"` begins a real press-and-hold of `X` (a
+`named_keys[]` entry, or any single character resolved via `tabcode[]`);
+`"[-]"` releases whatever's currently held (only one key tracked at a
+time). Two-code combos (`BST`) can't be meaningfully held and are
+silently ignored.
+
+Verified via `tests/key_hold_test.c` (11 checks, simulating the ROM's
+own repeated `flagKB`/`regK`-clearing) and `tests/hold_trace_test.c`
+(boots the real ROM, holds a real function key via the wire protocol,
+single-stepping like `main.c`) — a short tap never nullifies; an
+unreleased hold drives the ROM into the nullify branch at exactly the
+expected instruction count.
+
+## Software keyboard GUI — `tools/hp41_keyboard_gui.py`
+
+A Tkinter window displaying
+`HP-41CX_Programmable_Scientific_Calculator_(removed_background,_colour_adjustment).jpg`
+(a real HP-41CX keyboard photo, cropped to just the keyboard; CC BY-SA
+3.0, Wikimedia Commons — derivative of a photo by Sven.petersen,
+retouched by Pittigrilli — see full attribution in the script's header)
+with an invisible clickable rectangle over every physical key.
+`KEY_MAP`'s 39 hit-boxes were derived from gridded/labeled crops of the
+photo (not eyeballed) and verified by rendering all computed boxes back
+onto the full image, confirming each lands tightly on its own key with
+no overlaps. Clicking a key sends exactly the bytes a human typing at a
+terminal would send — no firmware/protocol changes were needed; every
+key already maps to something `hp41_key_bridge.c` understands (a plain
+`tabcode[]` byte, or a `[NAME]` escape).
+
+**Three button-behavior modes** (`PressMode`, switchable live via radio
+buttons or `--press-mode`):
+- `tap` — every click sends an instant tap immediately; the hold
+  protocol is never touched.
+- `hold` — every press immediately engages the real hold protocol
+  (`"[+X]"`/`"[-]"`) with no delay. Kept for comparison/reproduction, not
+  the recommended mode.
+- `threshold` (default) — waits `HOLD_ENGAGE_MS` (150ms) after
+  mouse-down before deciding whether this is a hold or a quick tap; a
+  release before that engages a plain instant tap instead. This
+  threshold exists because a GUI click's round-trip latency (mouse
+  event → Python → pyserial → USB → Pico) can itself exceed the ROM's
+  ~6ms blink threshold — the tap/hold distinction has to be made at the
+  GUI/UX layer, not tuned in firmware or ROM-cycle terms.
+
+No `<Enter>`/`<Leave>` hover-highlight bindings exist — macOS Aqua Tk has
+a quirk where changing a canvas item's appearance while the pointer is
+over it can spuriously retrigger Enter/Leave in a tight loop that
+presents as a total freeze; only one-shot `<Button-1>`/
+`<ButtonRelease-1>` bindings are used.
+
+Also includes a live serial log pane: the Pico's single USB CDC
+connection carries both key input and `main.c`'s own debug output, so
+the GUI reads that connection in a background thread and displays it,
+doubling as a debug console.
+
+Usage: `python3 tools/hp41_keyboard_gui.py [--port /dev/cu.usbmodemXXXX]`
+(auto-detects the Pico's port if omitted, excluding anything that looks
+like the Arduino display bridge). Needs `pyserial` and `Pillow`.
+
+## Arduino display bridge — the active display path
+
+```
+Pico 2 (Nut CPU emulator)  --UART, 9600 baud-->  Arduino Uno  --8-bit parallel-->  LCD
+```
+
+The direct Pico→LCD serial link (see below) never produced visible
+output on real hardware despite an exhaustively verified-correct
+protocol, so display output is currently routed through an Arduino Uno
+already independently validated against this exact LCD panel in
+parallel mode. This is the live path — **confirmed working end-to-end**
+on real hardware.
+
+- **Pico side** (`firmware/hp41_arduino_bridge.h`/`.c`):
+  `hp41_arduino_bridge_init()` sets up UART0 on GP0/GP1 (the same
+  physical pins the dormant direct-serial LCD link uses — not a live
+  conflict, since that link is inactive while this is in use).
+  `hp41_arduino_bridge_send_display_state()` sends the raw
+  `lcd_a/b/c[12]`/`lcd_ann` display registers directly (38 bytes, framed
+  as `[0xAA sync][38 payload][1 XOR checksum]`) rather than a
+  pre-rendered framebuffer — cut from an earlier 576-byte
+  full-framebuffer format (`hp41_arduino_bridge_send_frame()`, kept
+  intact but unused) for a ~15x smaller payload. `main.c` calls this
+  instead of `st7920_init()`/`hp41_display_render()` — both of those and
+  `firmware/st7920.c` are kept fully intact, just unused, so the direct
+  path can resume once a better level shifter arrives.
+- **Arduino side** (`Arduino NHD14432/NHD14432_DisplayBridge/`, a copy
+  of the original hardware-validated `NHD14432_POC/` sketch, which is
+  kept as its own untouched snapshot): `drawFrameFromRAM()` (like
+  `drawBitmap()` but reads a RAM buffer instead of PROGMEM),
+  `computeFramebufferFromState()` (decodes the raw display registers
+  into a pixel framebuffer locally, ported from
+  `hp41_display_bridge.c`), and `pollPicoLink()` (assembles incoming
+  bytes into a state packet, checksum-validates, decodes+draws on
+  match). Uses `SoftwareSerial` on D12(RX)/D13(TX) rather than the Uno's
+  hardware UART, which is reserved for USB.
+- Full wiring documented in `firmware/pins.h` and
+  `Arduino NHD14432/NHD14432_DisplayBridge/CLAUDE.md`.
+
+**Confirmed correctness method:** `main.c` prints an XOR checksum (and,
+optionally, full ASCII-art) of every computed framebuffer to the Pico's
+own USB console before sending it. The `MEMORY LOST` and ready-state
+checksums match the Arduino's own independently-computed test-bitmap
+checksums byte-for-byte — a repeatable way to verify display correctness
+without trusting the physical glass or the link. **Caveat:** a matching
+checksum does not by itself distinguish "blank" from real content (some
+genuinely different frames coincidentally XOR to the same value) —
+only the ASCII art (or a stronger hash) can tell them apart with
+certainty.
+
+**Known, fixed bugs in this path** (all confirmed on real hardware):
+- The Arduino's frame receiver had no resync mechanism — a single
+  dropped `SoftwareSerial` byte mid-frame would miscount every
+  subsequent byte forever. Fixed with `FRAME_TIMEOUT_MS` (1000ms): a
+  stalled frame is abandoned and the receiver waits for a fresh sync
+  byte instead of staying wedged.
+- `main.c` didn't let the CPU "sleep" after `POWOFF` — real hardware
+  halts the clock entirely and resumes at address 0 on a keyboard-scan
+  interrupt, but `main.c` was calling `executeNUT()` forever regardless,
+  running whatever ROM code follows `POWOFF` as a busy loop. Fixed with
+  an `asleep` flag: `executeNUT()` calls are suppressed until
+  `lgkeybuf>0`, at which point `regPC=0` and `flagKey=0` are reset
+  (mirroring `emu41gcc/emu41.c`'s own reference main loop) before
+  resuming.
+- CPU speed throttling: the Pico runs the core at ~1.4M instructions/sec
+  natively, far faster than the real Nut CPU's actual clock.
+  `TARGET_INSTRUCTIONS_PER_SEC` (200,000, an approximate commonly-cited
+  figure, not cycle-exact) is enforced via `sleep_us()` pacing.
+- **The "screen goes blank, catches up on next key" bug** (root cause,
+  confirmed): the ROM legitimately writes several rapid display updates
+  per keypress-driven wake (a real "settle, settle, final" pattern, not
+  a bug), ~55ms apart. `SoftwareSerial`'s receive is interrupt-driven,
+  and the Arduino's GDRAM write loop is precisely timed but doesn't
+  disable interrupts — so a burst's next frame arriving mid-draw could
+  corrupt the write in progress, even though the packet that triggered
+  it had already checksum-verified cleanly. Fixed by wrapping the
+  physical write in `noInterrupts()`/`interrupts()` in
+  `NHD14432_DisplayBridge.ino`'s `pollPicoLink()`. A related regression
+  (CLX/backspace produces 4 rapid updates instead of 3, and disabling
+  interrupts for the whole draw made *reception* impossible rather than
+  just unreliable during a burst) was fixed by pacing sends from the
+  Pico side instead: `MIN_ARDUINO_SEND_INTERVAL_MS` (180ms, in
+  `main.c`) enforces a minimum gap between sends. Note the gap must
+  account for `uart_write_blocking()` only blocking until bytes are
+  queued into the UART hardware FIFO, not until they've finished
+  physically transmitting (~42ms for this payload size at 9600 baud) —
+  the interval needs to cover that transmission tail plus the Arduino's
+  draw time.
+- This entire class of bug (a receive-while-drawing rate mismatch
+  between two independently-clocked boards) is specific to the
+  two-board architecture and shouldn't recur if the direct Pico→LCD link
+  ever replaces this bridge — a single-chip path has no second board's
+  asynchronous serial reception competing for the same write timing.
+
+**Tooling for this path:**
+- `arduino-cli` (`brew install arduino-cli`, `arduino:avr` core):
+  ```
+  arduino-cli compile --fqbn arduino:avr:uno "Arduino NHD14432/NHD14432_DisplayBridge"
+  arduino-cli upload -p /dev/cu.usbmodem<port> --fqbn arduino:avr:uno "Arduino NHD14432/NHD14432_DisplayBridge"
+  ```
+  `arduino-cli board list` identifies which `/dev/cu.usbmodem*` is the
+  Arduino (shows a board name) vs. the Pico (shows `Unknown`).
+- `picotool` (`brew install picotool`): `picotool reboot -f -u` forces a
+  running Pico into BOOTSEL mode remotely; it mounts as
+  `/Volumes/RP2350`, and `cp firmware/build/soynut.uf2 /Volumes/RP2350/`
+  flashes it (the volume disappearing confirms success). Prefer this
+  reflash pattern over `picotool reboot -a -f` if scripting resets from
+  Python — the latter can hang when invoked via `subprocess.run()`.
+- `pyserial` (`pip3 install pyserial`) for scripted serial access
+  (`serial.Serial(port, 115200, timeout=1)`, set `.dtr`/`.rts = True`
+  after opening). **Check for and kill stray `cat`/`screen`/`python3`
+  processes holding the port before opening a new connection**
+  (`lsof /dev/tty.usbmodem*`, `screen -ls`) — a leftover process can
+  silently block a new connection attempt with no error.
+
+## Direct Pico→LCD serial link — implemented, protocol-verified, not yet lit up
+
+A direct 3-wire serial connection from the Pico to the LCD (bypassing
+the Arduino) is fully implemented (`firmware/st7920.c`/`.h`,
+`firmware/pins.h`) but currently dormant — `main.c` calls into the
+Arduino bridge instead; the direct-drive calls are commented out, not
+deleted, so this can resume without rewriting anything.
+
+**What's been proven correct**, without the display ever lighting up:
+- CS polarity, sync-byte/nibble framing, and GDRAM addressing all match
+  the real ST7920 datasheet and a logic-analyzer capture of the actual
+  signals at the LCD's own pins: all 1920 CS pulses in a full capture
+  decoded to exactly 24 bits with zero errors, correct pulse widths and
+  inter-pulse gaps, and the decoded byte stream reconstructs the entire
+  expected GDRAM command sequence exactly.
+- Init timing was fixed to match the ST7920 datasheet's power-on
+  flowchart (>100us after Function Set, >100us after Display ON/OFF,
+  >10ms after Display Clear) — the controller has no instruction buffer
+  and silently drops commands sent before it finishes the previous one.
+- A standalone bring-up project, `lcd_bringup/` (own `CMakeLists.txt`,
+  zero dependency on `emu41gcc`/the ROM/the Arduino bridge), reproduces
+  the same blank-screen result in isolation — ruling out any
+  interaction with the rest of the firmware stack.
+
+**What's still unknown:** whether the actual analog voltage amplitude
+reaching the LCD crosses the ST7920's real `VIH` threshold (0.7×VDD ≈
+3.5V at 5V VDD) — a digital logic analyzer only confirms "past some
+threshold," not the real voltage margin — and whether `VDD` is
+genuinely present/stable at the LCD. Neither has been directly measured
+with a multimeter or scope. **If this link is revisited**, measure
+actual voltage levels first rather than re-litigating the
+protocol/timing/wiring, all of which is already proven correct as far as
+software alone can show. An actively-driven level shifter (see
+"Hardware" above) would also settle the question directly.
+
+`lcd_bringup/` stays in the repo for this purpose: interactive over USB
+serial at 115200 baud, auto-cycles test patterns or accepts single-char
+commands (`i`=reinit, `c`=clear, `f`=solid fill, `k`=checkerboard,
+`p`=toggle CS polarity live, `a`=toggle auto-cycle).
+
+## Firmware — `firmware/`: Pico SDK project
+
+- **`CMakeLists.txt`** — targets `PICO_BOARD=pico2` (RP2350).
+  `PICO_BOARD` must be set **before** `project()` — the SDK resolves
+  board/platform during that call, so setting it after silently falls
+  back to `PICO_PLATFORM=rp2040`/board `pico`. USB stdio is enabled
+  (`pico_enable_stdio_usb`); UART stdio is disabled (UART0 is used for
+  the Arduino bridge instead).
+- **`pins.h`** — GPIO assignments for both the dormant direct-drive LCD
+  path and the active Arduino-bridge path; full wiring table in its
+  header comment.
+- **`st7920.c`/`.h`** — low-level 3-wire serial ST7920 driver. No
+  busy-flag polling (never reads; `R/W` is fixed 0), fixed delays
+  instead (72us normal, 1.6ms after Clear, plus the datasheet power-on
+  timing above). Currently dormant (see above).
+- **`bitmaps.c`/`.h`** — three runtime-generated test patterns
+  (all-on, checkerboard, 4px border), unused in normal operation but
+  available as a hardware-debugging aid.
+- **`hp41_arduino_bridge.h`/`.c`** — the active display path (see above).
+- **`hp41_display_bridge.h`/`.c`**, **`hp41_key_bridge.h`/`.c`**,
+  **`hp41_key_hold_bridge.h`/`.c`** — see their sections above.
+- **`main.c`** — full system integration. `stdio_init_all()`, then
+  `hp41_arduino_bridge_init()`, then `nut_boot()`. Main loop per
+  iteration: drain pending USB bytes into the key bridge (always, even
+  asleep, since a key is what wakes it); if asleep and a key is now
+  queued, reset `regPC=0`/`flagKey=0` and wake; otherwise if asleep,
+  skip `executeNUT()` entirely; else run `executeNUT(1000)` (single-step
+  instead, sustaining the key-hold state, if a hold is active), throttle
+  via `sleep_us()`; on `fdsp`, compute the framebuffer, checksum it,
+  send it over the Arduino bridge (rate-limited via
+  `MIN_ARDUINO_SEND_INTERVAL_MS`); on `POWOFF`, go to sleep; once/second,
+  print a heartbeat (`PC`/`cptinstr`/`lgkeybuf`/`flagKey`/`regK`/`ret`/
+  `asleep`) so a genuine hang is distinguishable from normal sleep. Debug
+  logging throughout is lightweight (checksum + heartbeat + byte echo) —
+  the previous full ASCII-art-per-frame dump is commented out, not
+  deleted, if heavier tracing is ever needed again.
+- **`emu41gcc_compat/`** — build-time compatibility shims letting
+  `emu41gcc/nutcpu.c` and `display.c` (DOS-era C) compile under a modern
+  ARM GCC toolchain without changing the vendored source:
+  - `mem.h` → `#include <string.h>`; `dos.h` → `#define near`/`far` to
+    nothing (both meaningless on ARM).
+  - `nut_stubs.h`/`.c` — force-included for `nutcpu.c` only (`-include`
+    in CMakeLists), declaring the printer entry points `execp()` calls
+    with no header of their own, plus no-op bodies for
+    timer/HP-IL/printer functions and their `GLOBAL`-declared storage.
+  - `nut_globals.c` — the one place that `#define GLOBAL` to nothing and
+    `#include "nutcpu.h"`, instantiating real storage for
+    `regA`/`tabpage`/`espaceRAM`/etc. (playing the role of upstream's
+    `emu41.c`, without pulling in that whole DOS console app).
+  - `-fcommon` (scoped to `nutcpu.c`/`display.c`/`nut_globals.c`):
+    `nutcpu.h` declares `tabpage[16]`/`tabbank[16][4]` as plain
+    non-`extern` globals relying on old-style common-symbol linker
+    merging; GCC has defaulted to `-fno-common` since GCC 10, which
+    breaks the link with "multiple definition" without this flag.
+
+Build-verified: firmware links cleanly and produces
+`firmware/build/soynut.uf2` (drag onto the Pico 2 in BOOTSEL mode, or
+use `picotool` as described above).
+
+### Getting the Pico SDK
+
+`pico-sdk/` is gitignored, not committed — it's the official, versioned
+`raspberrypi/pico-sdk` (this project was built and tested against tag
+**2.3.0**), ~675MB including its own nested submodules
+(tinyusb/cyw43-driver/lwip/mbedtls/btstack), and — like most Pico
+projects — meant to live outside any one project's repo rather than be
+vendored per-project (`PICO_SDK_PATH` exists exactly for this). Fetch a
+matching copy yourself:
+
+```
+git clone --branch 2.3.0 --recurse-submodules https://github.com/raspberrypi/pico-sdk.git
+```
+
+Either place the checkout at `pico-sdk/` next to this repo's other
+top-level directories (`firmware/CMakeLists.txt` defaults to
+`${CMAKE_CURRENT_LIST_DIR}/../pico-sdk` when `PICO_SDK_PATH` isn't set),
+or point `PICO_SDK_PATH` (env var or `-DPICO_SDK_PATH=...`) at wherever
+you already keep it — useful if you have other Pico projects sharing
+one SDK checkout.
+
+### Toolchain setup (macOS, no sudo)
+
+Neither `arm-none-eabi-gcc` nor `ninja` come preinstalled:
+
+- `ninja`: `brew install ninja` works directly.
+- `brew install --cask gcc-arm-embedded` needs interactive `sudo` and
+  may not be usable in a sandboxed/non-interactive environment.
+- `brew install arm-none-eabi-gcc` (the formula) installs without sudo,
+  but doesn't bundle newlib (`libc.a`/`libg.a` missing) — linking fails
+  with `cannot find -lc`/`-lg`.
+- **Workaround:** extract the cask's already-downloaded `.pkg` payload
+  directly with `pkgutil --expand-full <path-to-pkg> <dest>/toolchain/extracted`
+  (no sudo needed) — this is the full ARM GNU Toolchain with newlib
+  bundled. `toolchain/` is gitignored; extract it fresh per machine.
+
+**To build**, put the extracted toolchain first on `PATH`:
+
+```
+cd firmware
+export PATH="$(cd .. && pwd)/toolchain/extracted/Payload/bin:$PATH"
+cmake -G Ninja -B build
+ninja -C build
+```
+
+(adjust the `toolchain/extracted/Payload/bin` path if you extracted it
+somewhere else). `toolchain/` and `firmware/build/` are gitignored —
+neither should be committed.
+
+### Native (host) tests
+
+No ARM toolchain needed — these compile and run with the system `cc`:
+
+```
+cc -std=gnu11 -fcommon -Iemu41gcc -Ifirmware/emu41gcc_compat \
+   -include firmware/emu41gcc_compat/nut_stubs.h \
+   -o tests/build/nut_smoke_test tests/nut_smoke_test.c \
+   emu41gcc/nutcpu.c emu41gcc/display.c \
+   firmware/emu41gcc_compat/nut_stubs.c \
+   firmware/emu41gcc_compat/nut_globals.c \
+   firmware/emu41gcc_compat/nut_rom.c \
+   roms/rom_images.c
+./tests/build/nut_smoke_test
+```
+
+`tests/nut_smoke_test.c` boots the ROM and runs `executeNUT()` in a
+bounded loop — the real HP-41 ROM executes cleanly (thousands of
+instructions, zero invalid opcodes) and reaches `POWOFF` showing
+`MEMORY LOST` on a cold start, exactly matching real hardware. The other
+native tests (`display_bridge_test.c`, `key_bridge_test.c`,
+`key_hold_test.c`, `hold_trace_test.c`) follow the same pattern with
+their own additional source files — see each file's own header comment
+for its exact build line, or adapt the one above.
+
+## ROM wiring — `firmware/emu41gcc_compat/nut_rom.h`/`.c`
+
+Wires the base HP-41 OS ROM (`roms/rom_images.c`'s `rom_nut0/1/2[4096]`)
+into `tabpage[0-2]`/`typmod[0-2]=1`, and sets the cold-start fields
+`initcpu()` would otherwise set (`regPC=0`, `regST=0x0800`, `Carry=1` —
+the coldstart flag the ROM's self-test checks — and `mode_printer=-1`).
+`roms/rom_images.c` is declared `extern` directly in `nut_rom.c`; update
+both together if the wired ROM set ever changes.
+
+## Directory map
+
+Everything below is load-bearing for the system (build/run/test some
+part of it) except `reference-material/`, a single top-level catch-all
+for research/provenance material nothing in the build reads anymore.
+
+```
+Arduino NHD14432/ NHD14432_POC/ (original, hardware-validated, untouched
+                 snapshot) + NHD14432_DisplayBridge/ (the active display
+                 bridge sketch — see "Arduino display bridge" above)
+emu41gcc/        Nut CPU emulation core - git submodule, not vendored
+                 files (see "The Nut CPU core" above); requires
+                 --recurse-submodules or `git submodule update --init`
+firmware/        Pico SDK project — display bring-up + Nut core wired
+                 into the build (emu41gcc_compat/ has the compat shims)
+lcd_bringup/     Standalone Pico SDK project (own CMakeLists.txt, no
+                 dependency on emu41gcc/ROM/Arduino) - isolated LCD
+                 bring-up testing. See "Direct Pico→LCD serial link"
+                 above - kept for reuse if that path is revisited.
+font-tables/     HP-41 font/segment table: generated tables
+                 (hp41_display_tables.c/h) + the three JSON sources
+                 gen_display_tables.py reads. Original .ai/.pdf source
+                 files live in reference-material/font-tables-source/.
+pico-sdk/        Official raspberrypi/pico-sdk checkout (dependency) -
+                 gitignored, not in this repo; see "Toolchain setup"
+                 below for how to fetch a matching copy
+roms/            ROM converter/format tools + roms/README.md's BYO
+                 instructions. The actual .ROM files and generated
+                 rom_images.c are gitignored, not in this repo - see
+                 "ROM images" above
+tests/           Native (non-Pico) tests - confirm the ROM boots, the
+                 display bridge renders correctly, and the key bridge
+                 parses input correctly, no hardware needed
+tools/           Native (non-Pico) diagnostic tools - nut_disasm.c (ROM
+                 disassembler using emu41gcc's own desas41.c),
+                 powoff_trace.c (single-step ROM/wake-cycle tracer), and
+                 hp41_keyboard_gui.py (clickable software keyboard)
+HP-41CX_..._(removed_background,_colour_adjustment).jpg
+                 Keyboard photo (CC BY-SA 3.0, Wikimedia Commons - see
+                 tools/hp41_keyboard_gui.py's header for attribution) the
+                 software keyboard GUI renders and overlays clickable
+                 regions on
+reference-material/ Datasheets, source mockups, and other
+                 research/provenance material nothing in the build reads
+                 anymore - kept for context only:
+                   datasheets/ - ST7920.pdf (controller), NHD-14432WG-
+                     BTFH-VT.pdf (LCD module), 20171225012850PINOUT-
+                     LogLevel.pdf (level shifter) - all cited throughout
+                     this doc as the source for specific design
+                     decisions, just not machine-read by anything
+                   display-mockups/ - the PNG/Pixen mockups the font
+                     table and pixel-segment maps were manually derived
+                     from
+                   font-tables-source/ - HP41C_Character_Display_Table
+                     .ai/.pdf, the original design files font-tables/'s
+                     JSON was extracted from
+                   synth.png - the Museum of HP Calculators' Nut opcode/
+                     instruction table (1997), human reference for ROM
+                     disassembly work
+                   4bun501eqka91.png - a generic Raspberry Pi Pico (not
+                     Pico 2/RP2350) pinout reference chart
+                   SystemBlockDiagram.txt - an early ASCII architecture
+                     diagram, superseded by this doc
+toolchain/       Extracted ARM GNU Toolchain (gitignored, see above)
+.gitmodules      Declares emu41gcc/ as a submodule (see above)
+LICENSE          GPL-2.0-or-later (see "License" note above)
+CLAUDE.md        This file
+DEVLOG.md        Session-by-session development history (gitignored,
+                 local-only - see the note at the top of this file)
+```
+
+## Known unknowns / next steps
+
+- **Direct Pico→LCD serial link**: protocol/timing fully verified, still
+  hasn't lit up the display — needs a multimeter/scope check of actual
+  voltage levels at the LCD (not yet done), ideally with an
+  actively-driven level shifter. See that section above.
+- **Auto power-off after every keypress**: confirmed real/intentional
+  ROM behavior (matches real HP-41 timeout logic, just scaled to trigger
+  sooner in this environment) — not a bug. The separate "screen goes
+  blank" symptom this was tangled up with is resolved (see "Arduino
+  display bridge" above).
+- **Font table codes 0-31 and 102-125** (most of lowercase `f`-`z`) need
+  proper re-extraction if ever needed; both currently render blank
+  rather than garbled.
+- **Press-and-hold**: the underlying mechanism and wire protocol are
+  confirmed working against the real ROM (host trace + real hardware),
+  including two responsiveness fixes (batching overhead, and a
+  150ms GUI-side tap/hold threshold to absorb round-trip latency). Not
+  yet independently reconfirmed on hardware that quick taps never
+  flash the hold-label in practice — worth a fresh check.
+- **`firmware/pins.h` GPIO assignments** need confirmation against
+  actual wiring — current values are placeholders, not a known-working
+  pinout carried over from prior hardware.
+- **Punctuation pixel mapping** (dot_top/dot_bottom/comma_tail) hasn't
+  been cross-checked against a rendered real colon/period/comma the way
+  the printable characters were.
+- `main.c` carries lightweight `TEMPORARY`-marked debug instrumentation
+  (heartbeat, byte/keybuffer echo, per-frame checksum) — safe to leave,
+  optionally strippable later.
