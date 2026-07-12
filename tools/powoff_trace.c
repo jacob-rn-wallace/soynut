@@ -6,17 +6,9 @@
  * lcd_a/b/c before the correct result, with our system freezing (POWOFF)
  * before ever reaching the correct write - or is it something else?
  *
- * Build (from repo root):
- *   cc -std=gnu11 -fcommon -Iemu41gcc -Ifirmware/emu41gcc_compat \
- *      -include firmware/emu41gcc_compat/nut_stubs.h \
- *      -o tools/build/powoff_trace tools/powoff_trace.c \
- *      emu41gcc/nutcpu.c emu41gcc/display.c \
- *      firmware/emu41gcc_compat/nut_stubs.c \
- *      firmware/emu41gcc_compat/nut_globals.c \
- *      firmware/emu41gcc_compat/nut_rom.c \
- *      roms/rom_images.c
- *   tools/build/powoff_trace
+ * Build: make -C tools   (see tools/Makefile), then ./tools/build/powoff_trace
  */
+#include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -24,6 +16,10 @@
 #include "nutcpu.h"
 
 #include "nut_rom.h"
+
+#define BATCH_SIZE 1000
+#define MAX_INSTR 2000000
+#define MAX_BATCHES ((MAX_INSTR / BATCH_SIZE) + 1) /* see tests/nut_smoke_test.c's run_until_settled() */
 
 extern unsigned char lcd_a[12];
 extern unsigned char lcd_b[12];
@@ -34,35 +30,49 @@ extern int lcd_ann;
  * kept in sync by hand, see that file's own comment for provenance. */
 static int decode_ascii(int v) {
     v &= 0x13f;
-    if (v <= 0x1f) return v + '@';
-    if (v <= 0x3f) {
-        if (v == 0x2c) return '<';
-        if (v == 0x2e) return '>';
-        if (v == 0x3a) return '*';
-        return v;
-    }
-    if (v <= 0x105) return v - 0xa0;
-    if (v <= 0x11f) {
+    assert(v >= 0 && v <= 0x13f);
+
+    int result;
+    if (v <= 0x1f) {
+        result = v + '@';
+    } else if (v <= 0x3f) {
+        if (v == 0x2c)      result = '<';
+        else if (v == 0x2e) result = '>';
+        else if (v == 0x3a) result = '*';
+        else                result = v;
+    } else if (v <= 0x105) {
+        result = v - 0xa0;
+    } else if (v <= 0x11f) {
         switch (v) {
-            case 0x106: return '~';
-            case 0x107: return '\'';
-            case 0x10c: return 'u';
-            case 0x10d: return '#';
-            case 0x10e: return 's';
-            case 0x10f: return 'a';
-            default:    return 'x';
+            case 0x106: result = '~';  break;
+            case 0x107: result = '\''; break;
+            case 0x10c: result = 'u';  break;
+            case 0x10d: result = '#';  break;
+            case 0x10e: result = 's';  break;
+            case 0x10f: result = 'a';  break;
+            default:    result = 'x';  break;
         }
+    } else {
+        result = v - 0x120 + 'a' - 1;
     }
-    return v - 0x120 + 'a' - 1;
+
+    /* See firmware/hp41_display_bridge.c's hp41_decode_ascii() for why
+     * this matters: the result is used as an index-ish value after
+     * masking, and this decode's input domain is sparse in practice, not
+     * the full range the mask above allows. */
+    assert(result >= 0);
+    return result;
 }
 
 static void render_display(char *out /* [13] */) {
+    assert(out != NULL);
     for (int pos = 0; pos < 12; pos++) {
         int i = 11 - pos;
         int v = (lcd_c[i] << 8) | ((lcd_b[i] & 3) << 4) | lcd_a[i];
         out[pos] = (char)(decode_ascii(v) & 0x7f);
     }
     out[12] = '\0';
+    assert(out[12] == '\0');
 }
 
 static char last_display[13] = "";
@@ -70,8 +80,10 @@ static int last_ann = -1;
 static char last_rendered_display[13] = "\x01"; /* sentinel: nothing rendered yet */
 
 static void check_display_change(const char *tag) {
+    assert(tag != NULL);
     char cur[13];
     render_display(cur);
+    assert(strlen(cur) <= 12);
     if (strcmp(cur, last_display) != 0 || lcd_ann != last_ann) {
         printf("  [%s] instr=%d PC=0x%04X dspon=%d display=\"%s\" ann=0x%03X\n",
                tag, cptinstr, regPC, dspon, cur, lcd_ann);
@@ -85,9 +97,11 @@ static void check_display_change(const char *tag) {
  * tells us whether blank content is really being written by the ROM, or
  * whether we're just freezing before a later, correct write happens). */
 static int run_until_powoff(const char *tag, int max_steps) {
+    assert(tag != NULL);
+    assert(max_steps > 0);
     int steps = 0, ret = 0;
     int render_count = 0;
-    while (steps < max_steps) {
+    for (int iter = 0; iter < max_steps && steps < max_steps; iter++) {
         int fdsp_before = fdsp;
         ret = executeNUT(1);
         steps++;
@@ -125,6 +139,8 @@ static int run_until_powoff(const char *tag, int max_steps) {
 }
 
 static void wake_with_key(const char *tag, unsigned char code) {
+    assert(tag != NULL);
+    assert(lgkeybuf >= 0 && lgkeybuf < 8); /* keybuffer[]'s real capacity */
     keybuffer[lgkeybuf++] = code;
     flagKey = 0;
     fdsp = 0; /* fresh per wake, matching main.c clearing it after each render */
@@ -134,12 +150,16 @@ static void wake_with_key(const char *tag, unsigned char code) {
 
 int main(void) {
     nut_boot();
+    assert(regPC == 0);
     printf("=== boot ===\n");
-    int ret;
-    do {
-        ret = executeNUT(1000);
+    int ret = 0;
+    for (int batch = 0; batch < MAX_BATCHES; batch++) {
+        ret = executeNUT(BATCH_SIZE);
         check_display_change("boot");
-    } while (ret == 0 && cptinstr < 2000000);
+        if (ret != 0 || cptinstr >= MAX_INSTR)
+            break;
+    }
+    assert(ret >= 0 && ret <= 3);
     printf("  boot: ret=%d PC=0x%04X instr=%d Carry=%d\n\n", ret, regPC, cptinstr, Carry);
 
     /* Reproduces the user's exact reported sequence: cold start -> ON,
