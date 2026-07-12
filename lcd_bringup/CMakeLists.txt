@@ -24,6 +24,16 @@ add_executable(lcd_bringup
         st7920.c
 )
 
+# Power of 10, Rule 10: strict warnings for our own two files. Scoped
+# with set_property/COMPILE_OPTIONS rather than target_compile_options -
+# some Pico SDK "libraries" (e.g. pico_bootrom) add their sources
+# directly to this target under the hood, and target_compile_options
+# would apply to those vendored sources too (confirmed: it fails on
+# pico-sdk's own bootrom.c under -Wpedantic, which isn't ours to fix).
+set_property(SOURCE main.c st7920.c APPEND PROPERTY COMPILE_OPTIONS
+        -Wall -Wextra -Wpedantic -Werror
+)
+
 target_link_libraries(lcd_bringup
         pico_stdlib
         hardware_gpio

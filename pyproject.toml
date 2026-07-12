@@ -1,0 +1,25 @@
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+# Power of 10 (Python adaptation), Rule 10: static analysis with zero
+# warnings. "ALL" plus a small, justified ignore list is more honest
+# than the ruff default subset - anything ignored here should have a
+# reason, not just be silently off.
+select = ["ALL"]
+ignore = [
+    "D",       # docstrings - this project's convention is comments only
+               # where the WHY isn't obvious, not module/function docstrings
+    "ANN",     # missing type annotations - handled by mypy instead, not ruff
+    "T201",    # `print` - these are CLI tools/scripts, print is the actual UI
+    "COM812",  # trailing comma - formatting nit, not a correctness rule
+    "S603",    # subprocess call check - flagged per-callsite instead where
+               # this project genuinely shells out (arduino-cli, picotool)
+]
+
+[tool.mypy]
+python_version = "3.9"
+disallow_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true

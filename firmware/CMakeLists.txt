@@ -76,6 +76,31 @@ set_source_files_properties(${EMU41GCC_DIR}/nutcpu.c PROPERTIES
         COMPILE_OPTIONS "-fcommon;-include${CMAKE_CURRENT_LIST_DIR}/emu41gcc_compat/nut_stubs.h"
 )
 
+# Power of 10, Rule 10: compile our own code with the most pedantic
+# warnings available and treat them as build failures. Deliberately
+# scoped away from emu41gcc/*.c (vendored, unmodifiable - see
+# DEVIATIONS.md and CLAUDE.md's "The Nut CPU core") and the generated
+# data tables (roms/rom_images.c, font-tables/hp41_display_tables.c),
+# neither of which we can or need to hold to this bar. set_property's
+# APPEND is required here, not set_source_files_properties, since that
+# would silently clobber the -fcommon options already set above for
+# several of these same files.
+set(SOYNUT_OWN_SOURCES
+        main.c
+        st7920.c
+        bitmaps.c
+        hp41_display_bridge.c
+        hp41_key_bridge.c
+        hp41_key_hold_bridge.c
+        hp41_arduino_bridge.c
+        emu41gcc_compat/nut_stubs.c
+        emu41gcc_compat/nut_globals.c
+        emu41gcc_compat/nut_rom.c
+)
+set_property(SOURCE ${SOYNUT_OWN_SOURCES} APPEND PROPERTY COMPILE_OPTIONS
+        -Wall -Wextra -Wpedantic -Werror
+)
+
 target_link_libraries(soynut
         pico_stdlib
         hardware_gpio
