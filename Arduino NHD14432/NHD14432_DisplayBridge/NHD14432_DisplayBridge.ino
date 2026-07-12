@@ -76,6 +76,7 @@
 #include "bitmaps.h"
 #include "hp41_display_tables_avr.h"
 #include <SoftwareSerial.h>
+#include <assert.h>
 #include <string.h>
 
 const uint8_t PIN_PICO_RX = 12; // <- Pico GP0 (UART0 TX), via level shifter
@@ -141,6 +142,12 @@ static inline void writeDataPins(uint8_t value) {
 }
 
 static void writeByte(bool rs, uint8_t value) {
+  // E must already be idle low when a new transaction begins - every
+  // prior writeByte() call (including st7920Init()'s own initial
+  // digitalWrite()) leaves it low on exit, same invariant as the Pico
+  // side's st7920.c.
+  assert(digitalRead(PIN_E) == LOW);
+
   digitalWrite(PIN_RS, rs ? HIGH : LOW);
   writeDataPins(value);
   // E is falling-edge triggered per datasheet: data must be valid before
@@ -150,6 +157,7 @@ static void writeByte(bool rs, uint8_t value) {
   // needed before this point.
   digitalWrite(PIN_E, HIGH);
   digitalWrite(PIN_E, LOW);
+  assert(digitalRead(PIN_E) == LOW);
 }
 
 static void writeCommand(uint8_t cmd) {
@@ -165,10 +173,12 @@ static void writeData(uint8_t data) {
 // ---- Init + graphics ------------------------------------------------------
 
 void st7920Init() {
+  assert(sizeof(DATA_PINS) / sizeof(DATA_PINS[0]) == 8);
   pinMode(PIN_RS, OUTPUT);
   pinMode(PIN_E, OUTPUT);
   for (uint8_t i = 0; i < 8; i++) pinMode(DATA_PINS[i], OUTPUT);
   digitalWrite(PIN_E, LOW);
+  assert(digitalRead(PIN_E) == LOW);
   delay(50); // let the panel power up
 
   writeCommand(0x30); // basic instruction set, 8-bit
@@ -197,6 +207,8 @@ void gdramClear() {
 // Draws a 144x32, 1bpp image (as produced by convert_images.py) starting
 // at GDRAM row 0. 9 words (18 bytes) per row, 32 rows.
 void drawBitmap(const uint8_t *bmp) {
+  assert(bmp != NULL);
+  assert(FRAME_PIXEL_SIZE == 32 * 9 * 2); /* ties this loop's implicit byte count to the declared buffer size */
   for (uint8_t y = 0; y < 32; y++) {
     writeCommand(0x80 | y); // vertical address 0-31
     writeCommand(0x80);     // horizontal address 0 (start of row)
@@ -215,6 +227,8 @@ void drawBitmap(const uint8_t *bmp) {
 // would misinterpret a normal RAM pointer, so this can't just call
 // drawBitmap() with the RAM buffer - it needs direct array indexing.
 void drawFrameFromRAM(const uint8_t *fb) {
+  assert(fb != NULL);
+  assert(FRAME_PIXEL_SIZE == 32 * 9 * 2);
   for (uint8_t y = 0; y < 32; y++) {
     writeCommand(0x80 | y);
     writeCommand(0x80);
@@ -228,38 +242,55 @@ void drawFrameFromRAM(const uint8_t *fb) {
 // ---- Raw display-state decode + plot (ported from firmware/hp41_display_bridge.c) -----
 
 static inline void setPx(uint8_t *fb, int x, int y) {
+  assert(fb != NULL);
+  assert(x >= 0 && x < 144 && y >= 0 && y < 32);
   fb[y * 18 + x / 8] |= (uint8_t)(0x80 >> (x % 8)); // 18 = 144px / 8 bits-per-byte
 }
 
 // Same raw-code-to-ASCII decode as emu41gcc/display.c's static
-// alpha41() / firmware/hp41_display_bridge.c's hp41_decode_ascii() -
-// keep all three in sync if this ever changes. v is the raw HP-41
-// display code: (lcd_c[i]<<8) | ((lcd_b[i]&3)<<4) | lcd_a[i].
+// alpha41() / firmware/hp41_display_bridge.c's hp41_decode_ascii() /
+// tools/powoff_trace.c's decode_ascii() - keep all four in sync if this
+// ever changes. v is the raw HP-41 display code:
+// (lcd_c[i]<<8) | ((lcd_b[i]&3)<<4) | lcd_a[i].
 static int decodeAscii(int v) {
   v &= 0x13f;
-  if (v <= 0x1f) return v + '@';
-  if (v <= 0x3f) {
-    if (v == 0x2c) return '<';  // backward flying goose
-    if (v == 0x2e) return '>';  // flying goose
-    if (v == 0x3a) return '*';  // starburst
-    return v;
-  }
-  if (v <= 0x105) return v - 0xa0;
-  if (v <= 0x11f) {
+  assert(v >= 0 && v <= 0x13f);
+
+  int result;
+  if (v <= 0x1f) {
+    result = v + '@';
+  } else if (v <= 0x3f) {
+    if (v == 0x2c)      result = '<';  // backward flying goose
+    else if (v == 0x2e) result = '>';  // flying goose
+    else if (v == 0x3a) result = '*';  // starburst
+    else                result = v;
+  } else if (v <= 0x105) {
+    result = v - 0xa0;
+  } else if (v <= 0x11f) {
     switch (v) {
-      case 0x106: return '~';  // top bar
-      case 0x107: return '\''; // append
-      case 0x10c: return 'u';  // micro
-      case 0x10d: return '#';  // different sign
-      case 0x10e: return 's';  // sigma
-      case 0x10f: return 'a';  // angle
-      default:    return 'x';  // non-displayable
+      case 0x106: result = '~';  break; // top bar
+      case 0x107: result = '\''; break; // append
+      case 0x10c: result = 'u';  break; // micro
+      case 0x10d: result = '#';  break; // different sign
+      case 0x10e: result = 's';  break; // sigma
+      case 0x10f: result = 'a';  break; // angle
+      default:    result = 'x';  break; // non-displayable
     }
+  } else {
+    result = v - 0x120 + 'a' - 1;
   }
-  return v - 0x120 + 'a' - 1;
+
+  // See firmware/hp41_display_bridge.c's hp41_decode_ascii() for why:
+  // this function's real input domain is sparse in practice, not the
+  // full range the mask above allows, and a negative result would be
+  // used as an array-ish index after the caller's & 0x7f mask.
+  assert(result >= 0);
+  return result;
 }
 
 static void plotSegment(uint8_t *fb, int cellX0, int segIndex) {
+  assert(fb != NULL);
+  assert(segIndex >= 0 && segIndex <= HP41_SEG_COMMA_TAIL);
   uint8_t off = pgm_read_byte(&hp41_segment_pixel_offset[segIndex]);
   uint8_t cnt = pgm_read_byte(&hp41_segment_pixel_count[segIndex]);
   for (uint8_t k = 0; k < cnt; k++) {
@@ -270,6 +301,8 @@ static void plotSegment(uint8_t *fb, int cellX0, int segIndex) {
 }
 
 static void plotAnnunciator(uint8_t *fb, int annIndex) {
+  assert(fb != NULL);
+  assert(annIndex >= 0 && annIndex < HP41_NUM_ANNUNCIATORS);
   uint8_t off = pgm_read_byte(&hp41_annunciator_pixel_offset[annIndex]);
   uint8_t cnt = pgm_read_byte(&hp41_annunciator_pixel_count[annIndex]);
   for (uint8_t k = 0; k < cnt; k++) {
@@ -282,6 +315,12 @@ static void plotAnnunciator(uint8_t *fb, int annIndex) {
 // state layout: lcd_a[12], lcd_b[12], lcd_c[12], lcd_ann low byte, high byte
 // (see hp41_arduino_bridge_send_display_state()'s comment on the Pico side).
 void computeFramebufferFromState(const uint8_t *state, uint8_t *fb) {
+  assert(state != NULL);
+  assert(fb != NULL);
+  /* Every character cell must fit on the physical 144px-wide panel -
+   * see firmware/hp41_display_bridge.c's identical check. */
+  assert(HP41_CELL_WIDTH_PX * HP41_NUM_CELLS <= 144);
+
   memset(fb, 0, FRAME_PIXEL_SIZE);
 
   const uint8_t *a = state;
@@ -338,6 +377,8 @@ void computeFramebufferFromState(const uint8_t *state, uint8_t *fb) {
 // receiver (no more bytes ever coming) could never notice it should
 // give up and resync.
 void pollPicoLink() {
+  assert(stateBufPos <= DISPLAY_STATE_SIZE); // invariant held across every call
+
   if (receivingState && (millis() - stateStartTime > FRAME_TIMEOUT_MS)) {
     receivingState = false; // gave up waiting - ready for a fresh sync byte
   }
@@ -356,6 +397,7 @@ void pollPicoLink() {
       stateBuf[stateBufPos++] = b;
     } else {
       // this byte is the checksum
+      assert(stateBufPos == DISPLAY_STATE_SIZE); // only reachable once the buffer is exactly full
       uint8_t checksum = 0;
       for (uint16_t i = 0; i < DISPLAY_STATE_SIZE; i++) checksum ^= stateBuf[i];
       // TEMPORARY diagnostic (investigating the "blank screen, catches up
