@@ -376,6 +376,26 @@ int main(void) {
             // the actual flash write entirely when nothing changed, so
             // this costs nothing extra on an idle/no-op POWOFF.
             dbg("soynut: POWOFF (Carry=%d) - sleeping until next key\n", Carry);
+
+            // POWOFF fires after essentially every keystroke (see the big
+            // comment above) - it's a power-saving CPU halt, not "the
+            // user turned the calculator off," and a real HP-41's display
+            // stays lit through it (the direct-drive segments are held by
+            // the ROM's own dspon-controlled state, not the running CPU).
+            // Only actually blank this panel's persistent-GDRAM glass when
+            // the ROM itself says the display should be off right now -
+            // emu41gcc/nutcpu.c's POWOFF opcode sets Carry=(dspon==0), so
+            // checking dspon directly here (rather than relying on that
+            // Carry side effect) is the same signal, more self-explanatory
+            // at the call site. Clearing unconditionally on every POWOFF
+            // (an earlier version of this fix) blanked the screen after
+            // nearly every keystroke instead of only on a real power-off -
+            // confirmed as a real regression on hardware, not theoretical.
+            if (dspon == 0) {
+                st7920_clear();
+                dbg("soynut: LCD cleared for power-off (dspon=0)\n");
+            }
+
             hp41_persist_state_t snap;
             hp41_persist_capture(&snap);
             hp41_persist_flash_save(&snap);

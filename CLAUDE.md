@@ -622,6 +622,42 @@ single-stepping like `main.c`) — a short tap never nullifies; an
 unreleased hold drives the ROM into the nullify branch at exactly the
 expected instruction count.
 
+## Display blanking on POWOFF
+
+`POWOFF` fires after essentially every keystroke (see "Firmware" below)
+— it's the real Nut CPU's power-saving CPU halt between keystrokes, not
+"the user turned the calculator off." On real HP-41 hardware the
+direct-drive segment display stays lit through this halt (the segments
+are held by the ROM's own display-on state, not by a running CPU); this
+project's ST7920 panel needs the equivalent behavior recreated
+explicitly, since it's a graphic controller with its own persistent
+GDRAM (`st7920_draw_frame()` is only called on `fdsp`, so without doing
+anything at `POWOFF` the glass would just keep showing whatever was
+last drawn indefinitely, which happens to be correct for this frequent
+between-keystroke case, but wrong for a genuine "display should be
+off" case).
+
+**The distinguishing signal:** `emu41gcc/nutcpu.c`'s `POWOFF` opcode
+dispatch sets `Carry=(dspon==0)` — `dspon` is the ROM's own explicit
+display-on flag, toggled by the separate `DISOFF`/`DISTOG` opcodes,
+completely independent of the `POWOFF` halt itself. `firmware/main.c`'s
+`ret==1` handling checks `dspon` directly (the same signal Carry
+momentarily reflects at that exact instant, made explicit rather than
+relying on that side effect) and only calls `st7920_clear()` when
+`dspon==0`.
+
+**Found as a real regression, not designed in from the start:** an
+earlier version of this fix cleared the LCD unconditionally on every
+`POWOFF`, which is wrong given how often `POWOFF` fires — confirmed on
+real hardware as a serious regression (the screen went blank within a
+fraction of a second of drawing anything, since the very next keystroke
+almost immediately re-triggers `POWOFF`). The `dspon`-conditional
+version was verified via the serial log: entering a multi-digit value
+now produces a `POWOFF (Carry=0)` for each digit with **no** "LCD
+cleared" line following it (display persists, matching real hardware),
+while a lone `ON` tap with nothing else queued (`dspon` never turned
+back on) correctly still clears.
+
 ## Continuous memory — `firmware/hp41_persist_state.h`/`.c`, `firmware/hp41_persist_flash.h`/`.c`
 
 The real HP-41 keeps its RAM alive across power-off via battery-backed
@@ -1021,8 +1057,10 @@ investigation is ever resumed.
   compute the framebuffer, checksum it, and push it straight to the LCD
   via `st7920_draw_frame()` (no pacing needed — unlike the old Arduino
   path, there's no second, independently-clocked board's receive/draw
-  timing to coordinate with); on `POWOFF`, capture and save a
-  persistence snapshot, then go to sleep; once/second,
+  timing to coordinate with); on `POWOFF`, conditionally clear the
+  physical LCD — see "Display blanking on POWOFF" below for why this is
+  conditional, not unconditional — then capture and save a persistence
+  snapshot, then go to sleep; once/second,
   print a heartbeat (`PC`/`cptinstr`/`lgkeybuf`/`flagKey`/`regK`/`ret`/
   `asleep`) so a genuine hang is distinguishable from normal sleep. Debug
   logging throughout is lightweight (checksum + heartbeat + byte echo) —
