@@ -43,16 +43,28 @@ having lit the display — see "Direct Pico→LCD serial link" below for
 that history and a note on what the parallel link's success implies
 about it.
 
-## Coding standard: NASA/JPL "Power of 10" (new code, from commit `0b65fa1` onward)
+## Coding standard: NASA/JPL "Power of 10"
 
-Any code written for this project's own original source **after commit
-`0b65fa1`** should comply with NASA/JPL's "Power of 10" rules for
-safety-critical code as closely as this project's realities allow. The
-goal is long-term legibility as the codebase grows, not certification —
-apply these as strong defaults, not absolute law; where a rule is
-genuinely impractical here, the exception should be as explicit and
-justified as the departures already documented elsewhere in this file
-(e.g. the CS-polarity/GDRAM-addressing notes above).
+This project's own original source complies with NASA/JPL's "Power of
+10" rules for safety-critical code, as closely as this project's
+realities allow. The goal is long-term legibility as the codebase
+grows, not certification — these are strong defaults, not absolute law;
+where a rule is genuinely impractical here, the exception is documented
+explicitly rather than silently ignored or faked.
+
+**Status: applied repo-wide, not just a forward-looking policy.** The
+policy was adopted in commit `8ab4107`; every in-scope file existing at
+that point was then actually rewritten to comply (tests/, firmware/
+including `emu41gcc_compat/` and every bridge file, `lcd_bringup/`,
+tools/, `NHD14432_DisplayBridge.ino`, and every in-scope Python script),
+verified by a full clean rebuild of every target (native tests, the ARM
+firmware, `lcd_bringup`, the native `tools/` binaries, and the Arduino
+sketch) plus a zero-warning `ruff`/`mypy` pass, all still true as of the
+most recent rewrite. New code should keep meeting this bar going
+forward — see `DEVIATIONS.md` for the full, authoritative list of
+specific exceptions (which rule, exactly what's excepted, why, and the
+boundary of the exception) rather than re-deriving them from the
+summary below, which only sketches enough to orient new code.
 
 **Reference (pinned to the exact revision this policy is based on):**
 - C: https://github.com/Vhivi/Powerof10-NASA/blob/29f6f3975bba9c6d6430f8638d8d561786b04c26/rules/Powerof10-C.md
@@ -73,9 +85,11 @@ any future edits to `Arduino NHD14432/NHD14432_DisplayBridge/*.ino`
 - `Arduino NHD14432/NHD14432_POC/` — explicitly preserved as an
   untouched, hardware-validated snapshot (see "Directory map"); it isn't
   meant to be edited going forward either.
-- Code already in the repo as of `0b65fa1` — not retroactively rewritten
-  for this. Only touch existing code for this reason if it's already
-  being substantially rewritten for some other reason anyway.
+- A handful of specific pre-existing functions the rewrite deliberately
+  left structurally alone rather than splitting apart purely for line
+  count (`main()`'s loop body, `hp41_key_bridge_feed_byte()`'s state
+  machine, the Arduino sketch's `pollPicoLink()`) — see Rule 4 below and
+  `DEVIATIONS.md`.
 
 **The 10 rules, applied to this codebase specifically:**
 
@@ -87,14 +101,15 @@ any future edits to `Arduino NHD14432/NHD14432_DisplayBridge/*.ino`
 2. **Every loop needs a provably fixed upper bound.** Most loops here
    already iterate over fixed-size hardware constants (`LCD_HEIGHT_PX`,
    `LCD_BYTES_PER_ROW`, a `keybuffer[8]` cap) — good fit, keep bounding
-   new loops the same way. The one existing pattern that's *not*
-   trivially bounded is `main.c`'s USB-byte-drain loop
-   (`while ((c = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT)`), which
-   only terminates because the USB FIFO itself is finite, not because
-   the loop counts anything — new code with a similar "drain until
-   empty" shape should add an explicit max-iterations cap per Rule 2's
-   own guidance for variable-bound loops, rather than relying on an
-   external buffer's size as an implicit bound.
+   new loops the same way. `main.c`'s USB-byte-drain loop
+   (`drain_usb_bytes()`) used to terminate only because the USB FIFO
+   itself is finite, not because the loop counted anything — it now has
+   an explicit `MAX_BYTES_PER_DRAIN` iteration cap; follow that same
+   pattern for any new "drain until empty" loop rather than relying on
+   an external buffer's size as an implicit bound. The two genuinely
+   unbounded loops left (the top-level `while (true)` and the
+   halt-on-fatal-error loop) are documented exceptions — see
+   `DEVIATIONS.md`.
 3. **No dynamic allocation after init.** Already the norm — display/key
    buffers are static/global arrays (`framebuf[LCD_FB_SIZE]`,
    `keybuffer[]`), never `malloc()`'d. Keep new buffers static or
@@ -107,14 +122,34 @@ any future edits to `Arduino NHD14432/NHD14432_DisplayBridge/*.ino`
    split is a reasonable model).
 5. **≥2 assertions per function, side-effect-free, explicit recovery on
    failure.** Use `assert()` (`<assert.h>`, works fine under the Pico
-   SDK/newlib) for pre/postconditions and invariants in new C code;
-   Python's `assert` for the tooling scripts. "Explicit recovery action"
-   on this project's bare-metal firmware realistically means what
-   `main.c` already does for invalid opcodes: report clearly over the
-   debug UART, then halt in a tight loop rather than silently continuing
-   into undefined behavior — there's no OS/exception handler to hand an
-   error to. Follow that existing pattern for new hard-invariant
-   failures rather than inventing a new one.
+   SDK/newlib) for pre/postconditions and invariants in new C code —
+   **but see the `-UNDEBUG` note below first**, since the Pico SDK's
+   default Release build type silently compiles every `assert()` to
+   nothing otherwise. For Python, use the small `check(condition,
+   message)` helper defined locally in each tooling script, not bare
+   `assert` — Python's `assert` is stripped under `-O`/`-OO`, which
+   would silently disable every check; see `DEVIATIONS.md`'s
+   implementation note. Trivial one-line setter/getter/wrapper
+   functions (e.g. `write_cmd()`, `hp41_key_bridge_reset()`) are a
+   deliberate exception to the ≥2 rule — see those functions' own
+   comments for why an assertion there would just restate the line
+   above it. "Explicit recovery action" on this project's bare-metal
+   firmware realistically means what `main.c` already does for invalid
+   opcodes: report clearly over the debug UART, then halt in a tight
+   loop rather than silently continuing into undefined behavior —
+   there's no OS/exception handler to hand an error to. Follow that
+   existing pattern for new hard-invariant failures rather than
+   inventing a new one.
+
+   **`-UNDEBUG` note:** `firmware/CMakeLists.txt` and
+   `lcd_bringup/CMakeLists.txt` both append `-UNDEBUG` when compiling
+   this project's own sources, specifically to counteract the Pico
+   SDK's default `-DNDEBUG` (Release build type) and keep `assert()`
+   genuinely active on real hardware. If you add a new CMake target
+   for Pico-side code, it needs this too, or every assertion in it is a
+   silent no-op — see `DEVIATIONS.md` for how this was actually caught
+   (an ARM-only `-Werror=unused-variable` from a variable an `assert()`
+   would otherwise have read).
 6. **Smallest possible variable scope.** General good practice, applies
    as-is. Note `nut_globals.c`'s file-scope globals
    (`tabpage`/`espaceRAM`/etc.) are a required exception, not a
@@ -145,14 +180,29 @@ any future edits to `Arduino NHD14432/NHD14432_DisplayBridge/*.ino`
    patterns internally; that's vendored and out of scope, per "Does NOT
    apply to" above.)
 10. **Compile with the most pedantic warnings enabled, zero warnings;
-    static analysis.** Not yet wired into `firmware/CMakeLists.txt` for
-    this project's own sources (`-Wall -Wextra -Wpedantic` scoped to the
-    non-vendored `.c` files, alongside a Python linter like `ruff` for
-    the tooling scripts) — worth doing as a deliberate follow-up if
-    wanted, since scoping it only to project-owned files avoids fighting
-    vendored code that was never written to be warning-clean. Ask before
-    assuming this should happen automatically, since enabling `-Werror`
-    could surface a real backlog of warnings in existing files.
+    static analysis.** Wired in and enforced, zero warnings on this
+    project's own sources as of the most recent rewrite:
+    - `firmware/CMakeLists.txt` / `lcd_bringup/CMakeLists.txt`:
+      `-Wall -Wextra -Wpedantic -Werror` via `set_property(SOURCE
+      ${SOYNUT_OWN_SOURCES} APPEND PROPERTY COMPILE_OPTIONS ...)` —
+      `APPEND`/`set_property` rather than `target_compile_options()` or
+      `set_source_files_properties()`, both of which either leak onto
+      vendored Pico SDK sources compiled into the same target (confirmed:
+      fails on `pico-sdk`'s own `bootrom.c`) or clobber the `-fcommon`
+      flags already set on the same files.
+    - `tests/Makefile` / `tools/Makefile`: same flags, applied per-object
+      so this project's own sources get them and vendored
+      `emu41gcc`/generated-table sources don't.
+    - Python: `ruff check .` (config in `pyproject.toml`, `select =
+      ["ALL"]` plus a small justified `ignore` list) and `mypy .`
+      (`requirements-dev.txt` has both tools); both exclude
+      `Arduino NHD14432/NHD14432_POC/` (untouched snapshot, see "Does NOT
+      apply to" above) and the external `pico-sdk/`/`toolchain/`
+      directories.
+    - The Arduino sketch: confirmed clean via `arduino-cli compile
+      --build-property compiler.warning_level=all`, though nothing
+      currently enforces this automatically on every build the way the
+      CMake/Makefile targets do.
 
 ## Hardware
 
@@ -757,7 +807,11 @@ investigation is ever resumed.
   back to `PICO_PLATFORM=rp2040`/board `pico`. USB stdio is enabled
   (`pico_enable_stdio_usb`); UART stdio is disabled (`hardware_uart` is
   still linked and `hp41_arduino_bridge.c` still builds, for the dormant
-  Arduino-bridge fallback, but nothing currently calls into it).
+  Arduino-bridge fallback, but nothing currently calls into it). Also
+  applies Power of 10 Rule 10 (`-Wall -Wextra -Wpedantic -Werror`,
+  scoped to `SOYNUT_OWN_SOURCES` only) and `-UNDEBUG` (keeps `assert()`
+  active despite the Pico SDK's default `-DNDEBUG` Release build type) —
+  see "Coding standard" above.
 - **`pins.h`** — GPIO assignments for both the active direct-drive
   parallel LCD path and the dormant Arduino-bridge path; full wiring
   table in its header comment.
@@ -937,11 +991,16 @@ roms/            ROM converter/format tools + roms/README.md's BYO
                  "ROM images" above
 tests/           Native (non-Pico) tests - confirm the ROM boots, the
                  display bridge renders correctly, and the key bridge
-                 parses input correctly, no hardware needed
+                 parses input correctly, no hardware needed. Makefile
+                 builds/runs all five (`make -C tests run`) with Power
+                 of 10 Rule 10's strict-warnings scoping - see "Native
+                 (host) tests" above.
 tools/           Native (non-Pico) diagnostic tools - nut_disasm.c (ROM
                  disassembler using emu41gcc's own desas41.c),
                  powoff_trace.c (single-step ROM/wake-cycle tracer), and
-                 hp41_keyboard_gui.py (clickable software keyboard)
+                 hp41_keyboard_gui.py (clickable software keyboard).
+                 Makefile builds the two C tools (`make -C tools`),
+                 same Rule 10 scoping as tests/Makefile.
 HP-41CX_..._(removed_background,_colour_adjustment).jpg
                  Keyboard photo (CC BY-SA 3.0, Wikimedia Commons - see
                  tools/hp41_keyboard_gui.py's header for attribution) the
@@ -972,6 +1031,14 @@ toolchain/       Extracted ARM GNU Toolchain (gitignored, see above)
 .gitmodules      Declares emu41gcc/ as a submodule (see above)
 LICENSE          GPL-2.0-or-later (see "License" note above)
 CLAUDE.md        This file
+DEVIATIONS.md    Power of 10 exception list - see "Coding standard"
+                 above; authoritative over any inline comment on the
+                 same topic if the two ever disagree
+pyproject.toml   ruff + mypy config for this project's Python files
+                 (Power of 10 Rule 10) - see "Coding standard" above
+requirements-dev.txt
+                 Python lint/typecheck tooling (`pip3 install -r
+                 requirements-dev.txt`, then `ruff check . && mypy .`)
 DEVLOG.md        Session-by-session development history (gitignored,
                  local-only - see the note at the top of this file)
 ```

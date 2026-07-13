@@ -56,21 +56,24 @@ current hardware bring-up status.
 Computer (USB serial)
    │  keypresses in / debug text out
    ▼
-Raspberry Pi Pico 2   ──UART──▶   Arduino Uno   ──8-bit parallel──▶   NHD-14432WG LCD
-(real Nut CPU core,                (display                           (ST7920 controller,
- real HP-41 ROM images)             driver)                            144×32, no backlight)
+Raspberry Pi Pico 2   ──8-bit parallel──▶   NHD-14432WG LCD
+(real Nut CPU core,     (direct GPIO,        (ST7920 controller,
+ real HP-41 ROM images)  via 3 level          144×32, no backlight)
+                         shifter boards)
 ```
 
 The Pico runs an adapted, unmodified copy of
 [emu41gcc](https://github.com/mmoller2k/emu41gcc) — a real, cycle-level
 Nut CPU emulator — against the genuine HP-41 OS ROM. Display output and
 keyboard input are bridged into and out of that core without touching a
-single line of the emulator itself. The LCD is currently driven through
-an intermediary Arduino Uno rather than directly by the Pico, purely as
-an interim measure while a better level-shifter part is sourced; the
-direct link is implemented and its protocol independently verified, just
-not yet lit up on real hardware. None of this is meant to be permanent —
-see "Where this is going" below.
+single line of the emulator itself. The Pico drives the LCD directly
+over its 8-bit parallel bus — no intermediary board in the loop. An
+earlier interim setup routed display output through an Arduino Uno
+while a suitable level shifter was sourced; that path (and an even
+earlier direct 3-wire serial attempt that never lit the display) are
+both kept in the repo, fully intact but dormant, in case either is ever
+needed again — see `CLAUDE.md`'s "Arduino display bridge" and "Direct
+Pico→LCD serial link" sections.
 
 Full technical detail — confirmed hardware facts, exact wiring, build
 instructions, and current open questions — lives in `CLAUDE.md`.
@@ -78,9 +81,9 @@ instructions, and current open questions — lives in `CLAUDE.md`.
 ## Getting started
 
 You'll need:
-- A Raspberry Pi Pico 2 (RP2350), an NHD-14432WG-BTFH-VT graphic LCD, an
-  Arduino Uno (for now), and a logic level shifter — see `CLAUDE.md`'s
-  "Hardware" section for the exact wiring.
+- A Raspberry Pi Pico 2 (RP2350), an NHD-14432WG-BTFH-VT graphic LCD,
+  and three 4-channel bidirectional logic level shifter boards — see
+  `CLAUDE.md`'s "Hardware" section for the exact wiring.
 - Your own legally-obtained HP-41 ROM images — **not included in this
   repo** (see below).
 - The official Raspberry Pi Pico SDK (also not vendored in this repo —
@@ -122,16 +125,24 @@ ninja -C build
   GPL-2.0-or-later (see `LICENSE`) to match the emulation core's own
   license exactly.
 
+## Code quality
+
+This project's own original code (not the vendored emulation core or
+Pico SDK) follows NASA/JPL's "Power of 10" rules for safety-critical C
+and Python — not because a calculator replica needs flight-software
+rigor, but because the discipline (bounded loops, real assertions,
+zero-warning builds, small functions) keeps a hobby project legible as
+it grows. See `CLAUDE.md`'s "Coding standard" section and
+`DEVIATIONS.md` for the specifics and the documented exceptions.
+
 ## Where this is going
 
-The current build — a Pico dev board, a bridge Arduino, breadboard
-wiring — is a means to an end, not the destination. The intent is to
-keep collapsing this down: a direct Pico-to-display link once a better
-level shifter resolves the one open hardware question left there,
-eventually a dedicated PCB, and eventually a real keyboard and
-enclosure, so the finished thing looks and feels like an HP-41 sitting
-on your desk — just one that was never at risk of a forty-year-old
-component quietly giving out.
+The current build — a Pico dev board, breadboard wiring, level shifter
+boards — is a means to an end, not the destination. The intent is to
+keep collapsing this down: eventually a dedicated PCB, and eventually a
+real keyboard and enclosure, so the finished thing looks and feels like
+an HP-41 sitting on your desk — just one that was never at risk of a
+forty-year-old component quietly giving out.
 
 ## Acknowledgments
 
