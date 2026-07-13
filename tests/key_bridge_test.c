@@ -1,4 +1,6 @@
-/* Native (host) test for firmware/hp41_key_bridge.c.
+/**
+ * @file key_bridge_test.c
+ * @brief Native (host) test for firmware/hp41_key_bridge.c.
  *
  * Doesn't need the Nut CPU running at all - just nutcpu.h's
  * keybuffer[]/lgkeybuf storage (via emu41gcc_compat/nut_globals.c) and
@@ -27,6 +29,9 @@
  * provably within. */
 #define KEYBUFFER_CAP 8
 
+/**
+ * @brief Reset keybuffer[]/lgkeybuf and the key bridge's escape state to idle.
+ */
 static void reset(void)
 {
     assert(sizeof(keybuffer) >= KEYBUFFER_CAP);
@@ -36,6 +41,10 @@ static void reset(void)
     assert(lgkeybuf == 0);
 }
 
+/**
+ * @brief Feed each byte of a NUL-terminated string through the key bridge.
+ * @param s Bytes to feed, in order.
+ */
 static void feed_string(const char *s)
 {
     assert(s != NULL);
@@ -44,9 +53,16 @@ static void feed_string(const char *s)
     assert(*s == '\0');
 }
 
-/* Compares keybuffer[0..lgkeybuf) against want[0..want_len). want may
- * be NULL only when want_len == 0. Returns 1 on match, 0 on mismatch
- * (and prints a diagnostic in the mismatch case). */
+/**
+ * @brief Compare keybuffer[0..lgkeybuf) against an expected keycode sequence.
+ *
+ * Prints a diagnostic (got vs. want) on mismatch.
+ *
+ * @param label     Human-readable name for this check, for the printed report.
+ * @param want      Expected keycodes, or NULL only when want_len == 0.
+ * @param want_len  Expected keybuffer length.
+ * @return 1 on match, 0 on mismatch.
+ */
 static int check(const char *label, const unsigned char *want, int want_len)
 {
     assert(label != NULL);
@@ -68,10 +84,14 @@ static int check(const char *label, const unsigned char *want, int want_len)
     return ok;
 }
 
-/* Direct ASCII keys - digits, operators, Enter, ctrl-chars, and an
- * unmapped byte that should push nothing. */
+/** Direct ASCII keys - digits, operators, Enter, ctrl-chars, and an
+ *  unmapped byte that should push nothing. */
 #define DIRECT_ASCII_CHECK_COUNT 8
 
+/**
+ * @brief Verify plain ASCII bytes map to their documented HP-41 keycodes.
+ * @return Number of failed checks (0 = all pass).
+ */
 static int test_direct_ascii_keys(void)
 {
     int failures = 0;
@@ -113,10 +133,14 @@ static int test_direct_ascii_keys(void)
     return failures;
 }
 
-/* Named-key escape protocol ("[NAME]"), including the one two-code
- * chord (BST) and case-insensitivity. */
+/** Named-key escape protocol ("[NAME]"), including the one two-code
+ *  chord (BST) and case-insensitivity. */
 #define NAMED_KEY_CHECK_COUNT 4
 
+/**
+ * @brief Verify the "[NAME]" escape protocol for keys with no ASCII equivalent.
+ * @return Number of failed checks (0 = all pass).
+ */
 static int test_named_key_protocol(void)
 {
     int failures = 0;
@@ -142,10 +166,14 @@ static int test_named_key_protocol(void)
     return failures;
 }
 
-/* Malformed bracket sequences must drop cleanly, without corrupting
- * whatever input follows them. */
+/** Malformed bracket sequences must drop cleanly, without corrupting
+ *  whatever input follows them. */
 #define MALFORMED_CHECK_COUNT 3
 
+/**
+ * @brief Verify malformed "[...]" sequences recover cleanly.
+ * @return Number of failed checks (0 = all pass).
+ */
 static int test_malformed_sequences(void)
 {
     int failures = 0;
@@ -167,11 +195,15 @@ static int test_malformed_sequences(void)
     return failures;
 }
 
-/* A realistic multi-key sequence, plus keybuffer[]'s fixed 8-slot cap
- * (extra presses beyond 8 pending are silently dropped, matching
- * emu41gcc's own push_key()). */
+/** A realistic multi-key sequence, plus keybuffer[]'s fixed 8-slot cap
+ *  (extra presses beyond 8 pending are silently dropped, matching
+ *  emu41gcc's own push_key()). */
 #define MULTI_KEY_CHECK_COUNT 2
 
+/**
+ * @brief Verify a realistic multi-key sequence and the 8-slot buffer cap.
+ * @return Number of failed checks (0 = all pass).
+ */
 static int test_multi_key_and_cap(void)
 {
     int failures = 0;
@@ -195,6 +227,10 @@ static int test_multi_key_and_cap(void)
 #define TOTAL_CHECK_COUNT (DIRECT_ASCII_CHECK_COUNT + NAMED_KEY_CHECK_COUNT \
                            + MALFORMED_CHECK_COUNT + MULTI_KEY_CHECK_COUNT)
 
+/**
+ * @brief Run all key bridge check groups and report pass/fail.
+ * @return 0 on pass, 1 on fail.
+ */
 int main(void)
 {
     const int failures = test_direct_ascii_keys()

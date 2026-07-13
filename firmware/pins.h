@@ -1,7 +1,20 @@
+/**
+ * @file pins.h
+ * @brief GPIO pin assignments for the Pico's two display paths (the
+ *        active direct-parallel LCD link, and the dormant Arduino-bridge
+ *        UART link) plus the wiring/level-shifting rationale behind them.
+ *
+ * See CLAUDE.md's "Hardware" and "Direct Pico->LCD parallel link"
+ * sections for the full physical wiring story; this header is the
+ * GPIO-number source of truth those sections describe in prose.
+ */
 #ifndef SOYNUT_PINS_H
 #define SOYNUT_PINS_H
 
-// *** ACTIVE PATH: direct Pico->LCD 8-bit parallel drive. ***
+/**
+ * @name Direct Pico->LCD parallel link (ACTIVE PATH)
+ * @{
+ */
 // NHD-14432WG-BTFH-VT, ST7920 controller, wired 8-bit parallel (see
 // CLAUDE.md "Hardware" section) - the LCD board's own default interface
 // (J3 shorted / J4 open, "Interface Selection" in the datasheet), so no
@@ -75,8 +88,12 @@
 #define PIN_LCD_DB5  7
 #define PIN_LCD_DB6  8
 #define PIN_LCD_DB7  9
+/** @} */
 
-// *** Arduino display bridge - DORMANT, kept as a fallback. ***
+/**
+ * @name Arduino display bridge (DORMANT - kept as a fallback)
+ * @{
+ */
 // Was the active path (Pico UART0 -> Arduino Uno -> LCD parallel) before
 // the direct-drive path above was reconfirmed working with a properly-
 // channeled level shifter setup (three boards instead of one). Kept
@@ -93,5 +110,6 @@
 
 #define PIN_ARDUINO_UART_TX  0   // UART0 TX -> Arduino D12 (via shifter) - dormant, see above
 #define PIN_ARDUINO_UART_RX  1   // UART0 RX <- Arduino D13 (via shifter; unused for now) - dormant, see above
+/** @} */
 
 #endif // SOYNUT_PINS_H

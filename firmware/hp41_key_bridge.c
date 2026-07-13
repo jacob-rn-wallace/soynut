@@ -1,6 +1,9 @@
-/* Bridges USB serial keypress bytes to emu41gcc's keybuffer[]/lgkeybuf
- * (see nutcpu.h - dokey(), in nutcpu.c, drains this exactly like the
- * real HP-41's keyboard scan state machine).
+/**
+ * @file hp41_key_bridge.c
+ * @brief Bridges USB serial keypress bytes to emu41gcc's
+ *        keybuffer[]/lgkeybuf (see nutcpu.h - dokey(), in nutcpu.c,
+ *        drains this exactly like the real HP-41's keyboard scan state
+ *        machine).
  */
 
 #include "hp41_key_bridge.h"
@@ -14,10 +17,13 @@
 
 #include "hp41_key_hold_bridge.h"
 
-/* ASCII (0-127) -> HP-41 keycode. Sourced unchanged from emu41gcc's
- * emu41.c, traite_touche()'s `tabcode[128]` - the same table the
- * reference DOS emulator uses to translate PC keyboard input, not
- * re-derived here. 0 means "no HP-41 key for this character".
+/**
+ * @brief ASCII (0-127) -> HP-41 keycode lookup table.
+ *
+ * Sourced unchanged from emu41gcc's emu41.c, traite_touche()'s
+ * `tabcode[128]` - the same table the reference DOS emulator uses to
+ * translate PC keyboard input, not re-derived here. 0 means "no HP-41
+ * key for this character".
  */
 static const unsigned char tabcode[128] = {
 /*  0    1    2    3    4    5    6    7    8    9   10   11   12   13   14   15 */
@@ -38,7 +44,19 @@ static const unsigned char tabcode[128] = {
  0x83,0x14,0x34,0x74,0x84,0x15,0x35,0x75,0x85,0x16,0x36,   0,   0,   0,   0,   0
 };
 
-/* Physical keys with no ASCII equivalent - sent as "[NAME]" over serial.
+/**
+ * @brief One entry in the named_keys[] table below: a "[NAME]" string
+ *        mapped to one or two HP-41 keycodes.
+ */
+typedef struct {
+    const char *name;
+    unsigned char code1;
+    unsigned char code2; /* 0 if this key is a single press */
+} named_key_t;
+
+/**
+ * @brief Physical keys with no ASCII equivalent, sent as "[NAME]" over serial.
+ *
  * Codes sourced from the same emu41.c, traite_touche()'s handling of
  * raw PC function/arrow-key scancodes (the c==0 branch), which a plain
  * ASCII byte stream has no equivalent of. Names are compared uppercase
@@ -49,11 +67,6 @@ static const unsigned char tabcode[128] = {
  * emu41.c's own `if (!fshift) push_key(0x12);` before SST's code for
  * its BST-producing scancodes).
  */
-typedef struct {
-    const char *name;
-    unsigned char code1;
-    unsigned char code2; /* 0 if this key is a single press */
-} named_key_t;
 
 static const named_key_t named_keys[] = {
     {"ON",    0x18, 0},
@@ -71,8 +84,13 @@ static const named_key_t named_keys[] = {
 };
 #define NUM_NAMED_KEYS (sizeof(named_keys) / sizeof(named_keys[0]))
 
-/* Mirrors emu41gcc's own push_key() (emu41.c): silently drop once the
+/**
+ * @brief Push one HP-41 keycode onto keybuffer[], dropping it if full.
+ *
+ * Mirrors emu41gcc's own push_key() (emu41.c): silently drop once the
  * buffer's 8 slots are full - a bounded FIFO, nothing exotic.
+ *
+ * @param code HP-41 keycode to push.
  */
 static void push_key(unsigned char code)
 {
@@ -82,6 +100,11 @@ static void push_key(unsigned char code)
     assert(lgkeybuf >= 0 && lgkeybuf <= 8);
 }
 
+/**
+ * @brief Look up a "[NAME]" string and push its keycode(s), if recognized.
+ *
+ * @param name Uppercase key name (no brackets), NUL-terminated.
+ */
 static void handle_named_key(const char *name)
 {
     assert(name != NULL);
@@ -98,13 +121,18 @@ static void handle_named_key(const char *name)
      * ASCII byte falling through tabcode[] to 0. */
 }
 
-/* Resolves a name to a single HP-41 keycode for "[+X]" hold-press
- * purposes: either a named_keys[] entry with no second code (two-code
- * combos like BST don't have a meaningful single "held" state, so
- * they're treated as unresolved here), or - if exactly one character -
- * a plain tabcode[] lookup, so any regular key (letters, digits,
- * operators) can be held too, not just named ones. Returns 0 if
- * unresolved, same "silently ignored" policy as elsewhere in this file.
+/**
+ * @brief Resolve a name to a single HP-41 keycode for "[+X]" hold-press purposes.
+ *
+ * Either a named_keys[] entry with no second code (two-code combos
+ * like BST don't have a meaningful single "held" state, so they're
+ * treated as unresolved here), or - if exactly one character - a plain
+ * tabcode[] lookup, so any regular key (letters, digits, operators) can
+ * be held too, not just named ones.
+ *
+ * @param name Uppercase key name, or a single character, NUL-terminated.
+ * @return The resolved keycode, or 0 if unresolved (same "silently
+ *         ignored" policy as elsewhere in this file).
  */
 static unsigned char resolve_hold_code(const char *name)
 {
@@ -134,16 +162,26 @@ static unsigned char resolve_hold_code(const char *name)
 static char name_buf[NAME_BUF_SIZE];
 static int name_len = STATE_NORMAL;
 
-/* Power of 10, Rule 5 note: this is a single, unconditional assignment -
+/**
+ * @brief Reset the "[NAME]" escape-sequence state to idle.
+ *
+ * Power of 10, Rule 5 note: this is a single, unconditional assignment -
  * there's no precondition to check and the postcondition is exactly
  * the line above it, so an assertion here would just restate it rather
  * than catch a real anomaly (same rationale as nut_stubs.c's no-op
- * stubs). */
+ * stubs).
+ */
 void hp41_key_bridge_reset(void)
 {
     name_len = STATE_NORMAL;
 }
 
+/**
+ * @brief Feed one incoming protocol byte; see hp41_key_bridge.h for the
+ *        full protocol description.
+ *
+ * @param c The incoming byte, as an int.
+ */
 void hp41_key_bridge_feed_byte(int c)
 {
     assert(name_len >= STATE_OVERFLOW && name_len < NAME_BUF_SIZE);

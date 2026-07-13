@@ -1,7 +1,9 @@
-/* Native (host) end-to-end trace of the real key-hold-duration fix
- * against the actual ROM, not just at the adapter-unit level (see
- * tests/key_hold_test.c for the deterministic unit-level proof of
- * hp41_key_hold_bridge.c itself).
+/**
+ * @file hold_trace_test.c
+ * @brief Native (host) end-to-end trace of the real key-hold-duration
+ *        fix against the actual ROM, not just at the adapter-unit level
+ *        (see tests/key_hold_test.c for the deterministic unit-level
+ *        proof of hp41_key_hold_bridge.c itself).
  *
  * Boots the real HP-41CV ROM (same as nut_smoke_test.c), wakes it with
  * a real held key via the actual production path (hp41_key_bridge.c's
@@ -67,6 +69,10 @@
 #define SETTLE_BATCH_SIZE 1000
 #define SETTLE_MAX_BATCHES 20000
 
+/**
+ * @brief Feed each byte of a NUL-terminated string through the key bridge.
+ * @param s Bytes to feed, in order.
+ */
 static void feed(const char *s)
 {
     assert(s != NULL);
@@ -75,9 +81,10 @@ static void feed(const char *s)
     assert(*s == '\0');
 }
 
-/* Runs executeNUT() in fixed-size batches until it stops advancing
- * (POWOFF/invalid/breakpoint/display-dirty) or SETTLE_MAX_BATCHES have
- * run. Returns the last status code. */
+/**
+ * @brief Run executeNUT() in fixed-size batches until it stops advancing or a cap is hit.
+ * @return executeNUT()'s last status code.
+ */
 static int settle(void)
 {
     int ret = 0;
@@ -92,9 +99,16 @@ static int settle(void)
     return ret;
 }
 
-/* Logs regPC/flagKB/regK the first time this trace visits each of the
- * four addresses of interest, so the printed trace has one line per
- * state transition rather than one per instruction. */
+/**
+ * @brief Log regPC/flagKB/regK the first time the trace visits one of
+ *        the four addresses of interest.
+ *
+ * So the printed trace has one line per state transition rather than
+ * one per instruction.
+ *
+ * @param steps           Current single-step count, for the log line.
+ * @param last_logged_pc  In/out: the last PC value logged; updated in place.
+ */
 static void log_pc_of_interest(int steps, unsigned int *last_logged_pc)
 {
     assert(last_logged_pc != NULL);
@@ -107,21 +121,35 @@ static void log_pc_of_interest(int steps, unsigned int *last_logged_pc)
     }
 }
 
-/* Runs the calculator forward, waking it from POWOFF with a previously
- * fed key sequence exactly like main.c's main loop does (see
- * CLAUDE.md's "Arduino display bridge" section, point 4). max_steps
- * bounds how many single instructions to execute - a fixed, provable
- * loop bound (Power of 10, Rule 2), since the for-loop below iterates
- * at most max_steps times regardless of how `steps` itself advances.
- * visited_nult/hit_nullify/hit_distog report whether regPC ever entered
- * the hold/nullify address range and which specific addresses it hit.
+/**
+ * @brief Run the calculator forward, waking it from POWOFF with a
+ *        previously-fed held key, and trace its hold/nullify behavior.
  *
- * drain_interval models how often main.c actually notices an incoming
- * release byte, in instructions - a real release becomes "available" at
- * release_after_steps, but is only actually acted on at the next
- * multiple of drain_interval at or past that point. drain_interval=1
- * matches the current (fixed) design - drain_usb_bytes() runs every
- * single inner-loop iteration.
+ * Runs the calculator forward, waking it from POWOFF with a previously
+ * fed key sequence exactly like main.c's main loop does (see
+ * CLAUDE.md's "Arduino display bridge" section, point 4).
+ *
+ * @param max_steps           Bounds how many single instructions to
+ *                            execute - a fixed, provable loop bound
+ *                            (Power of 10, Rule 2), since the for-loop
+ *                            below iterates at most max_steps times
+ *                            regardless of how `steps` itself advances.
+ * @param release_after_steps Step count at which to release the held
+ *                            key; negative means "never release within
+ *                            this trace window".
+ * @param drain_interval      Models how often main.c actually notices
+ *                            an incoming release byte, in instructions
+ *                            - a real release becomes "available" at
+ *                            release_after_steps, but is only actually
+ *                            acted on at the next multiple of
+ *                            drain_interval at or past that point.
+ *                            drain_interval=1 matches the current
+ *                            (fixed) design - drain_usb_bytes() runs
+ *                            every single inner-loop iteration.
+ * @param visited_nult  Out: whether regPC ever entered the hold/nullify
+ *                      address range.
+ * @param hit_nullify   Out: whether regPC ever reached the nullify branch.
+ * @param hit_distog    Out: whether regPC ever hit the "blink the label" toggle.
  */
 static void run_and_trace2(int max_steps, int release_after_steps, int drain_interval,
                             int *visited_nult, int *hit_nullify, int *hit_distog)
@@ -178,18 +206,29 @@ static void run_and_trace2(int max_steps, int release_after_steps, int drain_int
     printf("    (ran %d steps, NULT10 loop entered %d times)\n", steps, nult10_hits);
 }
 
+/**
+ * @brief run_and_trace2() with the default drain_interval=1.
+ * @param max_steps            See run_and_trace2().
+ * @param release_after_steps  See run_and_trace2().
+ * @param visited_nult  Out: see run_and_trace2().
+ * @param hit_nullify   Out: see run_and_trace2().
+ * @param hit_distog    Out: see run_and_trace2().
+ */
 static void run_and_trace(int max_steps, int release_after_steps,
                            int *visited_nult, int *hit_nullify, int *hit_distog)
 {
     run_and_trace2(max_steps, release_after_steps, 1, visited_nult, hit_nullify, hit_distog);
 }
 
-/* Boots the ROM to its cold-start "MEMORY LOST" / POWOFF state, then
- * presses ON twice - matches the real, previously-established behavior
- * (see CLAUDE.md's "Screen goes blank" investigation): the first
- * wake-restart still shows "MEMORY LOST" again (whatever Carry
- * naturally ended up as isn't reset on wake, same as main.c), and a
- * second ON is what actually reaches the ready "0.0000" state. */
+/**
+ * @brief Boot the ROM to cold-start, then press ON twice to reach the ready state.
+ *
+ * Matches the real, previously-established behavior (see CLAUDE.md's
+ * "Screen goes blank" investigation): the first wake-restart still
+ * shows "MEMORY LOST" again (whatever Carry naturally ended up as
+ * isn't reset on wake, same as main.c), and a second ON is what
+ * actually reaches the ready "0.0000" state.
+ */
 static void boot_and_wake_twice(void)
 {
     nut_boot();
@@ -209,10 +248,16 @@ static void boot_and_wake_twice(void)
     }
 }
 
-/* Instantaneous tap: release on literally the first single-stepped
- * instruction after the press. On real hardware, a genuinely quick tap
- * shouldn't show the "blink the label" toggle (DISTOG) at all - it
- * should execute immediately. Returns 1 on failure. */
+/**
+ * @brief Verify an instantaneous tap never triggers the "blink the label" toggle.
+ *
+ * Releases on literally the first single-stepped instruction after the
+ * press. On real hardware, a genuinely quick tap shouldn't show the
+ * "blink the label" toggle (DISTOG) at all - it should execute
+ * immediately.
+ *
+ * @return 1 on failure, 0 on pass.
+ */
 static int scenario_instant_tap(void)
 {
     int visited, nullified, distogged;
@@ -233,10 +278,15 @@ static int scenario_instant_tap(void)
     return 0;
 }
 
-/* Quick tap: press and release almost immediately (well under the
- * ROM's real ~0.5s threshold). May or may not visit the hold-check
- * range at all, but must NOT reach the nullify branch. Returns 1 on
- * failure. */
+/**
+ * @brief Verify a quick tap never reaches the nullify branch.
+ *
+ * Presses and releases almost immediately (well under the ROM's real
+ * ~0.5s threshold). May or may not visit the hold-check range at all,
+ * but must NOT reach the nullify branch.
+ *
+ * @return 1 on failure, 0 on pass.
+ */
 static int scenario_quick_tap(void)
 {
     int visited, nullified, distogged;
@@ -257,10 +307,15 @@ static int scenario_quick_tap(void)
     return 0;
 }
 
-/* Long hold: press and never release within this trace window. Should
- * reach the nullify branch if held long enough to exceed the ROM's own
- * loop-count threshold. Returns the number of failed checks (0, 1, or
- * 2). */
+/**
+ * @brief Verify a long, never-released hold reaches the nullify branch.
+ *
+ * Presses and never releases within this trace window. Should reach
+ * the nullify branch if held long enough to exceed the ROM's own
+ * loop-count threshold.
+ *
+ * @return Number of failed checks (0, 1, or 2).
+ */
 static int scenario_long_hold(void)
 {
     int visited, nullified, distogged;
@@ -288,6 +343,10 @@ static int scenario_long_hold(void)
     return failures;
 }
 
+/**
+ * @brief Boot the ROM, then run all three hold-duration scenarios and report pass/fail.
+ * @return 0 on pass, 1 on fail.
+ */
 int main(void)
 {
     /* NOTE: an earlier version of this test tried to reproduce a

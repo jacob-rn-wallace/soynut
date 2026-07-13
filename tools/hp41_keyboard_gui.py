@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""
-Clickable HP-41C keyboard for the Soynut replica - lets you drive the
-emulator with a mouse instead of typing key names/ASCII by hand over
-serial. Displays HP-41CX_Programmable_Scientific_Calculator_(removed_
+"""Clickable HP-41C keyboard GUI for the Soynut replica.
+
+Lets you drive the emulator with a mouse instead of typing key
+names/ASCII by hand over serial. Displays
+HP-41CX_Programmable_Scientific_Calculator_(removed_
 background,_colour_adjustment).jpg - a real photo of an HP-41CX keyboard,
 cropped to just the keyboard - and overlays an invisible clickable
 rectangle over each physical key. Swapped in this session for the
@@ -116,9 +117,10 @@ def check(condition: bool, message: str) -> None:
 
 
 class PressMode:
-    """The three button-behavior modes this GUI supports - see the
-    module docstring for what each one does and why all three are kept
-    around instead of just the current recommended one.
+    """The three button-behavior modes this GUI supports.
+
+    See the module docstring for what each one does and why all three
+    are kept around instead of just the current recommended one.
     """
 
     TAP_ONLY = "tap"
@@ -218,13 +220,20 @@ KEY_MAP: list[tuple[str, int, int, int, int, bytes]] = [
 
 
 def _hold_press_bytes(key: bytes) -> bytes:
-    """Wraps a KEY_MAP entry into a "[+X]" press-and-hold-start escape
-    (see firmware/hp41_key_bridge.h): "[NAME]" becomes "[+NAME]", and a
+    r"""Wrap a KEY_MAP entry into a "[+X]" press-and-hold-start escape.
+
+    See firmware/hp41_key_bridge.h: "[NAME]" becomes "[+NAME]", and a
     plain single character (digits, operators, ALPHA-mode letters, or
-    raw \\r for Enter) becomes "[+<char>]" - hp41_key_bridge.c's
+    raw \r for Enter) becomes "[+<char>]" - hp41_key_bridge.c's
     resolve_hold_code() falls back to a tabcode[] lookup for anything
     that isn't a recognized name, so no special-casing is needed here
     for which case a given key is.
+
+    Args:
+        key: A KEY_MAP entry's raw protocol bytes.
+
+    Returns:
+        The wrapped "[+...]" hold-press escape sequence.
     """
     check(len(key) > 0, "KEY_MAP entry has an empty key")
     if key.startswith(b"[") and key.endswith(b"]"):
@@ -233,6 +242,20 @@ def _hold_press_bytes(key: bytes) -> bytes:
 
 
 def find_port() -> str:
+    """Auto-detect the Pico's USB serial port.
+
+    Excludes anything that looks like the Arduino display bridge (see
+    CLAUDE.md's "Arduino display bridge" section) - that's the *other*
+    board in this project's setup, not the one this GUI should talk to.
+
+    Returns:
+        The single plausible port's device path.
+
+    Raises:
+        SystemExit: if zero or more than one plausible port is found;
+            prints the available ports first so the user can pass
+            --port explicitly.
+    """
     ports = list(serial.tools.list_ports.comports())
     candidates = [p for p in ports if "usbmodem" in p.device.lower()
                   and "arduino" not in (p.description or "").lower()]
@@ -248,13 +271,21 @@ def find_port() -> str:
 
 
 class SerialLink:
-    """Owns the serial connection: writes keys from the GUI thread,
-    reads lines in a background thread and hands them to the GUI via a
-    queue (Tkinter isn't thread-safe - the main loop polls the queue
-    instead of touching widgets from this thread directly).
+    """Owns the serial connection.
+
+    Writes keys from the GUI thread, reads lines in a background thread
+    and hands them to the GUI via a queue (Tkinter isn't thread-safe -
+    the main loop polls the queue instead of touching widgets from this
+    thread directly).
     """
 
     def __init__(self, port: str) -> None:
+        """Open the serial port and start the background read thread.
+
+        Args:
+            port: Device path for the Pico's USB serial port (e.g.
+                "/dev/cu.usbmodem14201").
+        """
         self.ser = serial.Serial(port, BAUD_RATE, timeout=0.2)
         self.line_queue: queue.Queue[str] = queue.Queue()
         self._stop = threading.Event()
@@ -262,6 +293,7 @@ class SerialLink:
         self._thread.start()
 
     def _read_loop(self) -> None:
+        """Background thread body: read bytes, split on newlines, queue lines."""
         buf = b""
         while not self._stop.is_set():
             try:
@@ -276,19 +308,36 @@ class SerialLink:
                 self.line_queue.put(line.decode(errors="replace").rstrip("\r"))
 
     def send(self, data: bytes) -> None:
+        """Write bytes to the serial port and flush immediately.
+
+        Args:
+            data: Bytes to send (a key protocol byte string, e.g. b"[+A]").
+        """
         check(len(data) > 0, "SerialLink.send() called with empty data")
         self.ser.write(data)
         self.ser.flush()
 
     def close(self) -> None:
+        """Stop the read thread and close the serial port."""
         self._stop.set()
         self.ser.close()
 
 
 class KeyboardApp:
+    """The clickable keyboard window: photo canvas, mode selector, and serial log pane."""
+
     def __init__(
         self, root: tk.Tk, link: SerialLink, initial_mode: str = PressMode.THRESHOLD,
     ) -> None:
+        """Build the keyboard window: canvas, side panel, and serial polling.
+
+        Args:
+            root: The Tk root window to build the UI into.
+            link: An already-open SerialLink to send keys through and
+                read the debug log from.
+            initial_mode: One of PressMode.ALL, the button-behavior mode
+                selected when the window first opens.
+        """
         check(initial_mode in PressMode.ALL, f"unknown initial_mode: {initial_mode!r}")
         self.link = link
         root.title("HP-41C Keyboard (Soynut)")
@@ -319,9 +368,9 @@ class KeyboardApp:
         root.after(50, self._poll_serial)
 
     def _build_canvas(self, main: tk.Frame, disp_w: int, disp_h: int) -> tk.Canvas:
-        """Builds the keyboard photo canvas and binds every KEY_MAP
-        entry's clickable rectangle over it. Split out of __init__ to
-        keep that one under Rule 4's ~60-line target.
+        """Build the keyboard photo canvas and bind every KEY_MAP entry's clickable rectangle.
+
+        Split out of __init__ to keep that one under Rule 4's ~60-line target.
         """
         canvas = tk.Canvas(main, width=disp_w, height=disp_h, highlightthickness=0)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH)
@@ -359,9 +408,9 @@ class KeyboardApp:
         return canvas
 
     def _build_side_panel(self, main: tk.Frame) -> tuple[tk.Label, tk.Text]:
-        """Builds the mode-selector radio buttons, status line, and
-        serial log pane. Split out of __init__ alongside _build_canvas()
-        for the same Rule 4 reason.
+        """Build the mode-selector radio buttons, status line, and serial log pane.
+
+        Split out of __init__ alongside _build_canvas() for the same Rule 4 reason.
         """
         side = tk.Frame(main)
         side.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -382,6 +431,12 @@ class KeyboardApp:
         return status, log
 
     def _send_tap(self, label: str, key: bytes) -> None:
+        """Send a plain instant tap (no hold protocol) and update the status line.
+
+        Args:
+            label: Human-readable key name, for the status line.
+            key: The raw KEY_MAP protocol bytes for this key.
+        """
         try:
             self.link.send(key)
         except serial.SerialException as e:
@@ -390,6 +445,14 @@ class KeyboardApp:
         self.status.config(text=f"tapped {label} -> {key!r}")
 
     def _on_press(self, label: str, key: bytes, rect_id: int) -> None:
+        """Handle mouse-down on a key's rectangle: flash it, then act per the active mode.
+
+        Args:
+            label: Human-readable key name, for the status line.
+            key: The raw KEY_MAP protocol bytes for this key.
+            rect_id: Canvas item id of this key's clickable rectangle,
+                for the visual press flash.
+        """
         # Visual "pressed" flash happens immediately regardless of mode -
         # purely local UI feedback, doesn't need to match the ROM's own
         # timing.
@@ -425,6 +488,12 @@ class KeyboardApp:
         self._hold_timer = self.canvas.after(HOLD_ENGAGE_MS, lambda: self._engage_hold(label, key))
 
     def _engage_hold(self, label: str, key: bytes) -> None:
+        """Begin the real "[+X]" hold protocol for the given key.
+
+        Args:
+            label: Human-readable key name, for the status line.
+            key: The raw KEY_MAP protocol bytes for this key.
+        """
         self._hold_timer = None
         self._hold_engaged = True
         send_bytes = _hold_press_bytes(key)
@@ -436,6 +505,14 @@ class KeyboardApp:
         self.status.config(text=f"holding {label} -> {send_bytes!r}")
 
     def _on_release(self, label: str, key: bytes, rect_id: int) -> None:
+        """Handle mouse-up on a key's rectangle: end a hold, or send a deferred tap.
+
+        Args:
+            label: Human-readable key name, for the status line.
+            key: The raw KEY_MAP protocol bytes for this key.
+            rect_id: Canvas item id of this key's clickable rectangle,
+                for clearing the visual press flash.
+        """
         self.canvas.itemconfig(rect_id, outline="")
 
         if self._active_mode == PressMode.TAP_ONLY:
@@ -463,10 +540,14 @@ class KeyboardApp:
         self._send_tap(label, key)
 
     def _append_log(self, line: str) -> None:
-        """Appends one line to the log pane, then trims from the top if
-        it's grown past MAX_LOG_LINES - Power of 10 (Python adaptation)
-        Rule 3: an unattended long-running session must not let this
-        widget's backing text grow without bound.
+        """Append one line to the log pane, trimming from the top past MAX_LOG_LINES.
+
+        Power of 10 (Python adaptation) Rule 3: an unattended
+        long-running session must not let this widget's backing text
+        grow without bound.
+
+        Args:
+            line: The log line to append (no trailing newline needed).
         """
         self.log.config(state=tk.NORMAL)
         self.log.insert(tk.END, line + "\n")
@@ -478,6 +559,7 @@ class KeyboardApp:
         self.log.config(state=tk.DISABLED)
 
     def _poll_serial(self) -> None:
+        """Drain any queued serial log lines into the log pane, then reschedule itself."""
         try:
             while True:
                 line = self.link.line_queue.get_nowait()
@@ -488,6 +570,7 @@ class KeyboardApp:
 
 
 def main() -> None:
+    """Parse args, connect to the Pico, and run the Tk event loop until the window closes."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--port", help="Pico's USB serial port (auto-detected if omitted)")

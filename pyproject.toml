@@ -15,8 +15,6 @@ extend-exclude = ["Arduino NHD14432/NHD14432_POC"]
 # reason, not just be silently off.
 select = ["ALL"]
 ignore = [
-    "D",       # docstrings - this project's convention is comments only
-               # where the WHY isn't obvious, not module/function docstrings
     "ANN",     # missing type annotations - handled by mypy instead, not ruff
     "T201",    # `print` - these are CLI tools/scripts, print is the actual UI
     "COM812",  # trailing comma - formatting nit, not a correctness rule
@@ -26,6 +24,12 @@ ignore = [
                # 10 Rule 5's non-strippable stand-in for `assert cond, msg`)
                # is deliberately positional to mirror `assert`'s own syntax
 ]
+
+[tool.ruff.lint.pydocstyle]
+# Commenting standard (see CLAUDE.md): every module/function/class gets
+# a Google-style docstring - this is what lets ruff's "D" rules (no
+# longer in the ignore list above) actually enforce that automatically.
+convention = "google"
 
 [tool.mypy]
 python_version = "3.9"

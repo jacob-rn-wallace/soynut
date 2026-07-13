@@ -1,4 +1,7 @@
-/* Native (host) test for the display bridge (firmware/hp41_display_bridge.c).
+/**
+ * @file display_bridge_test.c
+ * @brief Native (host) test for the display bridge
+ *        (firmware/hp41_display_bridge.c).
  *
  * Boots the real HP-41 ROM exactly like tests/nut_smoke_test.c, then
  * calls hp41_display_compute_framebuffer() (the hardware-free half of
@@ -36,14 +39,26 @@ extern int lcd_ann;
 #define MAX_INSTR 2000000
 #define MAX_BATCHES ((MAX_INSTR / BATCH_SIZE) + 1) /* see nut_smoke_test.c's run_until_settled() */
 
-/* hp41_display_bridge.c's hp41_display_render() calls st7920_draw_frame()
+/**
+ * @brief No-op stand-in for firmware/st7920.c's real GPIO driver.
+ *
+ * hp41_display_bridge.c's hp41_display_render() calls st7920_draw_frame()
  * (real GPIO/ST7920 code, firmware/st7920.c - Pico-only, doesn't build
  * on the host). This test only calls hp41_display_compute_framebuffer(),
  * never hp41_display_render(), but the linker still needs the symbol
  * resolved since it's referenced from the same translation unit.
+ *
+ * @param fb Ignored.
  */
 void st7920_draw_frame(const uint8_t *fb) { (void)fb; }
 
+/**
+ * @brief Read one pixel from a 1bpp, row-major, MSB-first framebuffer.
+ * @param fb Framebuffer, at least LCD_FB_SIZE bytes.
+ * @param x  Absolute column, 0 to LCD_WIDTH_PX-1.
+ * @param y  Absolute row, 0 to LCD_HEIGHT_PX-1.
+ * @return 1 if lit, 0 if not.
+ */
 static int get_px(const uint8_t *fb, int x, int y)
 {
     assert(fb != NULL);
@@ -51,6 +66,11 @@ static int get_px(const uint8_t *fb, int x, int y)
     return (fb[y * LCD_BYTES_PER_ROW + x / 8] >> (7 - (x % 8))) & 1;
 }
 
+/**
+ * @brief Count the total number of lit pixels in a framebuffer.
+ * @param fb Framebuffer, at least LCD_FB_SIZE bytes.
+ * @return Lit pixel count, 0 to LCD_WIDTH_PX*LCD_HEIGHT_PX.
+ */
 static int count_lit(const uint8_t *fb)
 {
     assert(fb != NULL);
@@ -62,6 +82,10 @@ static int count_lit(const uint8_t *fb)
     return lit;
 }
 
+/**
+ * @brief Dump a framebuffer as ASCII art ('#'/'.') to stdout.
+ * @param fb Framebuffer, at least LCD_FB_SIZE bytes.
+ */
 static void print_framebuffer(const uint8_t *fb)
 {
     assert(fb != NULL);
@@ -73,10 +97,14 @@ static void print_framebuffer(const uint8_t *fb)
     }
 }
 
-/* Runs the ROM in fixed-size batches until it stops advancing or
- * MAX_INSTR total instructions have run - see nut_smoke_test.c's
- * run_until_settled() for the Rule 2 rationale (a fixed batch-count
- * cap, not an open-ended "while (ret == 0)"). */
+/**
+ * @brief Run the ROM in fixed-size batches until it stops advancing or a cap is hit.
+ *
+ * See nut_smoke_test.c's run_until_settled() for the Rule 2 rationale
+ * (a fixed batch-count cap, not an open-ended "while (ret == 0)").
+ *
+ * @return executeNUT()'s last status code.
+ */
 static int run_until_settled(void)
 {
     int ret = 0;
@@ -91,9 +119,20 @@ static int run_until_settled(void)
     return ret;
 }
 
-/* Lights each annunciator bit one at a time and confirms it adds
+/**
+ * @brief Verify each annunciator bit lights exactly its documented pixel count.
+ *
+ * Lights each annunciator bit one at a time and confirms it adds
  * exactly its documented pixel count, then all 12 at once (confirming
- * no overlap). Returns the number of mismatches found. */
+ * no overlap).
+ *
+ * @param fb        Scratch framebuffer, at least LCD_FB_SIZE bytes;
+ *                  overwritten repeatedly.
+ * @param chars_lit Baseline lit-pixel count from character cells alone
+ *                  (subtracted out before comparing against each
+ *                  annunciator's expected count).
+ * @return Number of mismatches found (0 = all pass).
+ */
 static int check_annunciators(uint8_t *fb, int chars_lit)
 {
     assert(fb != NULL);
@@ -124,6 +163,10 @@ static int check_annunciators(uint8_t *fb, int chars_lit)
     return failures;
 }
 
+/**
+ * @brief Boot the ROM, render the cold-start screen, and verify pixel counts.
+ * @return 0 on pass, 1 on fail.
+ */
 int main(void)
 {
     uint8_t fb[LCD_FB_SIZE];

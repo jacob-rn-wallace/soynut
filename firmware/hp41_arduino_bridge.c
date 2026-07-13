@@ -1,3 +1,9 @@
+/**
+ * @file hp41_arduino_bridge.c
+ * @brief See hp41_arduino_bridge.h for the design of this dormant
+ *        fallback display path.
+ */
+
 #include "hp41_arduino_bridge.h"
 
 #include <assert.h>
@@ -28,11 +34,14 @@ extern unsigned char lcd_b[HP41_NUM_CELLS];
 extern unsigned char lcd_c[HP41_NUM_CELLS];
 extern int lcd_ann;
 
-// lcd_a[12] + lcd_b[12] + lcd_c[12] + lcd_ann (2 bytes, low byte then
-// high byte) - see hp41_arduino_bridge_send_display_state()'s header
-// comment.
+/** lcd_a[12] + lcd_b[12] + lcd_c[12] + lcd_ann (2 bytes, low byte then
+ *  high byte) - see hp41_arduino_bridge_send_display_state()'s header
+ *  comment. */
 #define DISPLAY_STATE_SIZE (HP41_NUM_CELLS * 3 + 2)
 
+/**
+ * @brief Initialize the UART link to the Arduino bridge; see the header.
+ */
 void hp41_arduino_bridge_init(void) {
     /* uart_init() returns the actual baud rate the hardware clock
      * divider achieved, which can differ slightly from what was
@@ -47,6 +56,11 @@ void hp41_arduino_bridge_init(void) {
     gpio_set_function(PIN_ARDUINO_UART_RX, GPIO_FUNC_UART);
 }
 
+/**
+ * @brief Send a full pixel framebuffer to the Arduino; see the header.
+ *
+ * @param fb Framebuffer to send, exactly LCD_FB_SIZE bytes.
+ */
 void hp41_arduino_bridge_send_frame(const uint8_t *fb) {
     assert(fb != NULL);
     assert(LCD_FB_SIZE > 0);
@@ -60,6 +74,9 @@ void hp41_arduino_bridge_send_frame(const uint8_t *fb) {
     uart_putc_raw(BRIDGE_UART, checksum);
 }
 
+/**
+ * @brief Send the Nut CPU's raw display registers to the Arduino; see the header.
+ */
 void hp41_arduino_bridge_send_display_state(void) {
     uint8_t payload[DISPLAY_STATE_SIZE];
     assert(sizeof(payload) == DISPLAY_STATE_SIZE);
@@ -96,6 +113,9 @@ void hp41_arduino_bridge_send_display_state(void) {
     uart_putc_raw(BRIDGE_UART, checksum);
 }
 
+/**
+ * @brief TEMPORARY diagnostic: send a hardcoded, known-good display payload; see the header.
+ */
 void hp41_arduino_bridge_send_test_payload(void) {
     // Captured verbatim from a real run's raw-payload hex dump (see
     // above) at the exact moment the ROM computed "2.0000" (instr=9217,

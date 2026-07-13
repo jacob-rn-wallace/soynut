@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""
-Convert NUT0.ROM / NUT1.ROM / NUT2.ROM (confirmed format: big-endian
-uint16_t, 4096 words/page, values 0-0x3FF) into a C source file exposing
-them as flat uint16_t[4096] arrays, ready to point tabpage[] at.
+"""Convert HP-41 base OS ROM files into a C source file.
+
+NUT0.ROM / NUT1.ROM / NUT2.ROM (confirmed format: big-endian uint16_t,
+4096 words/page, values 0-0x3FF) become flat uint16_t[4096] arrays,
+ready to point tabpage[] at.
 
 Usage:
     python3 rom_to_c.py NUT0.ROM NUT1.ROM NUT2.ROM > rom_images.c
@@ -29,6 +30,16 @@ def check(condition: bool, message: str) -> None:
 
 
 def convert(path: Path) -> tuple[int, ...]:
+    """Read a .ROM file and unpack it as big-endian 16-bit words.
+
+    Args:
+        path: Path to the .ROM file to convert.
+
+    Returns:
+        The file's words, in order. Prints a warning to stderr (but
+        still returns the data) if any word exceeds the expected 10-bit
+        range - the confirmed format may not hold for that file.
+    """
     with path.open("rb") as f:
         data = f.read()
     check(len(data) % 2 == 0, f"{path}: odd byte count")
@@ -42,10 +53,19 @@ def convert(path: Path) -> tuple[int, ...]:
 
 
 def c_name(path: Path) -> str:
+    """Derive the generated C array name for a ROM file (e.g. NUT0.ROM -> rom_nut0).
+
+    Args:
+        path: Path to the .ROM file.
+
+    Returns:
+        A valid C identifier for this ROM's array.
+    """
     return "rom_" + path.stem.lower().replace("-", "_")
 
 
 def main() -> None:
+    """Convert each ROM file argument to a C array and print the combined source to stdout."""
     if len(sys.argv) < MIN_ARGS:
         print(__doc__)
         sys.exit(1)

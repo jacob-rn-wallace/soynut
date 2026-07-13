@@ -1,4 +1,6 @@
-/* Compatibility shim for emu41gcc's DOS-era <dos.h> include.
+/**
+ * @file dos.h
+ * @brief Compatibility shim for emu41gcc's DOS-era <dos.h> include.
  *
  * nutcpu.c only needs this header for the Borland/Watcom `near`/`far`
  * memory-model keywords (used live in `#define LOCAL static near`) and a

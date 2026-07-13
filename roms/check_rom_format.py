@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""
-Run this on your Mac against NUT0.ROM (or any of the *.ROM files) to check
-whether they're really "4096 words, 16-bit slots, only low 10 bits used."
+"""Check whether a .ROM file matches the expected 10-bit-word format.
+
+Run this against NUT0.ROM (or any of the *.ROM files) to check whether
+it's really "4096 words, 16-bit slots, only low 10 bits used."
 
 Usage:
     python3 check_rom_format.py /Applications/my41cx.app/Contents/Resources/NUT0.ROM
@@ -16,6 +17,17 @@ PREVIEW_WORD_COUNT = 16
 
 
 def analyze(path: Path, endian_fmt: str, label: str) -> int:
+    """Unpack a ROM file under one candidate endianness and report out-of-range words.
+
+    Args:
+        path: Path to the .ROM file to check.
+        endian_fmt: struct format endianness prefix ("<" or ">").
+        label: Human-readable name for this ordering, for the printed report.
+
+    Returns:
+        Count of words whose value exceeds MAX_ROM_WORD_VALUE (0 means
+        this ordering is consistent with the 10-bit-word assumption).
+    """
     with path.open("rb") as f:
         data = f.read()
     n_words = len(data) // 2
@@ -30,6 +42,7 @@ def analyze(path: Path, endian_fmt: str, label: str) -> int:
 
 
 def main() -> None:
+    """Analyze one ROM file under both endiannesses and print a verdict."""
     if len(sys.argv) != EXPECTED_ARGC:
         print(__doc__)
         sys.exit(1)

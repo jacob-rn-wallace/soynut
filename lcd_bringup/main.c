@@ -1,3 +1,9 @@
+/**
+ * @file main.c
+ * @brief Standalone LCD bring-up/wiring-verification program - see the
+ *        block comment below for its purpose and serial command set.
+ */
+
 #include "pico/stdlib.h"
 #include <assert.h>
 #include <stdio.h>
@@ -26,10 +32,16 @@
 //   k - checkerboard pattern
 //   a - toggle auto-cycle on/off
 
+/**
+ * @brief Print the serial command menu.
+ */
 static void print_help(void) {
     printf("lcd_bringup: commands: i=reinit c=clear f=fill(solid) k=checkerboard a=toggle-auto-cycle\n");
 }
 
+/**
+ * @brief Render and push an 8x8 checkerboard test pattern to the LCD.
+ */
 static void do_checkerboard(void) {
     static uint8_t fb[LCD_FB_SIZE];
     assert(sizeof(fb) == LCD_FB_SIZE);
@@ -43,6 +55,10 @@ static void do_checkerboard(void) {
     st7920_draw_frame(fb);
 }
 
+/**
+ * @brief Dispatch one incoming serial command byte to the matching test.
+ * @param c The command character, as read from getchar_timeout_us().
+ */
 static void run_command(int c) {
     assert(c >= 0 && c <= 255); /* caller already filtered out PICO_ERROR_TIMEOUT */
     assert(c != PICO_ERROR_TIMEOUT);
@@ -70,6 +86,11 @@ static void run_command(int c) {
     }
 }
 
+/**
+ * @brief Entry point: init the LCD, then loop handling serial commands
+ *        and (by default) auto-cycling through the basic test patterns.
+ * @return Never returns.
+ */
 int main(void) {
     stdio_init_all();
 

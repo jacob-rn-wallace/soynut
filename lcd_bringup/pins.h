@@ -1,3 +1,8 @@
+/**
+ * @file pins.h
+ * @brief GPIO pin assignments for lcd_bringup's standalone parallel LCD
+ *        bring-up project - mirrors firmware/pins.h's active-path wiring.
+ */
 #ifndef LCD_BRINGUP_PINS_H
 #define LCD_BRINGUP_PINS_H
 

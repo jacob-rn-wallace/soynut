@@ -1,6 +1,7 @@
-/*
-  NHD-14432WG-BTFH-VT display bridge — HP-41C replica display
-  ----------------------------------------------------------------
+/**
+ * @file NHD14432_DisplayBridge.ino
+ * @brief NHD-14432WG-BTFH-VT display bridge — HP-41C replica display
+ * ----------------------------------------------------------------
   8-bit PARALLEL interface version (matches the board's as-shipped jumper
   setting — no rework needed). This is a copy of NHD14432_POC (kept
   untouched as a snapshot of that stage of the project - see its own
@@ -136,11 +137,20 @@ const uint8_t DATA_PINS[8] = {4, 5, 6, 7, 8, 9, 10, 11}; // DB0..DB7
 // PORTD bits 0-3 are D0/D1 (USB Serial RX/TX - must never glitch) and
 // D2/D3 (RS/E, written separately below); PORTB bits 4-7 are D12/D13
 // (the SoftwareSerial Pico link) plus the crystal bits.
+/**
+ * @brief Write a full byte onto the DB0-DB7 parallel data bus via direct AVR port writes.
+ * @param value The byte to place on DB0-DB7.
+ */
 static inline void writeDataPins(uint8_t value) {
   PORTD = (PORTD & 0x0F) | ((value & 0x0F) << 4);
   PORTB = (PORTB & 0xF0) | ((value >> 4) & 0x0F);
 }
 
+/**
+ * @brief Latch one byte onto the ST7920's 8-bit parallel bus.
+ * @param rs    Whether this is a data byte (true) or command (false); drives RS.
+ * @param value The byte to write.
+ */
 static void writeByte(bool rs, uint8_t value) {
   // E must already be idle low when a new transaction begins - every
   // prior writeByte() call (including st7920Init()'s own initial
@@ -160,11 +170,19 @@ static void writeByte(bool rs, uint8_t value) {
   assert(digitalRead(PIN_E) == LOW);
 }
 
+/**
+ * @brief Send one command byte with the datasheet's default 72us settle time.
+ * @param cmd Command byte.
+ */
 static void writeCommand(uint8_t cmd) {
   writeByte(false, cmd);
   delayMicroseconds(72); // datasheet: most instructions take 72us
 }
 
+/**
+ * @brief Send one data byte with the datasheet's default 72us settle time.
+ * @param data Data byte, typically one GDRAM word-half.
+ */
 static void writeData(uint8_t data) {
   writeByte(true, data);
   delayMicroseconds(72);
@@ -172,6 +190,9 @@ static void writeData(uint8_t data) {
 
 // ---- Init + graphics ------------------------------------------------------
 
+/**
+ * @brief Configure GPIOs and run the ST7920 power-on command sequence.
+ */
 void st7920Init() {
   assert(sizeof(DATA_PINS) / sizeof(DATA_PINS[0]) == 8);
   pinMode(PIN_RS, OUTPUT);
@@ -191,8 +212,10 @@ void st7920Init() {
   delay(2);
 }
 
-// Clears the full GDRAM (both halves, in case the controller still
-// exposes the full 64-row address space internally).
+/**
+ * @brief Clear the full GDRAM (both halves, in case the controller
+ *        still exposes the full 64-row address space internally).
+ */
 void gdramClear() {
   for (uint8_t y = 0; y < 64; y++) {
     writeCommand(0x80 | (y & 0x1F));           // vertical address
@@ -204,8 +227,13 @@ void gdramClear() {
   }
 }
 
-// Draws a 144x32, 1bpp image (as produced by convert_images.py) starting
-// at GDRAM row 0. 9 words (18 bytes) per row, 32 rows.
+/**
+ * @brief Draw a 144x32, 1bpp PROGMEM image starting at GDRAM row 0.
+ *
+ * 9 words (18 bytes) per row, 32 rows.
+ *
+ * @param bmp PROGMEM image data, as produced by convert_images.py.
+ */
 void drawBitmap(const uint8_t *bmp) {
   assert(bmp != NULL);
   assert(FRAME_PIXEL_SIZE == 32 * 9 * 2); /* ties this loop's implicit byte count to the declared buffer size */
@@ -221,11 +249,17 @@ void drawBitmap(const uint8_t *bmp) {
   }
 }
 
-// Same as drawBitmap(), but reads from a plain RAM buffer instead of
-// PROGMEM - used for frames received live from the Pico bridge link,
-// which land in ordinary SRAM (frameBuf below), not flash. pgm_read_byte()
-// would misinterpret a normal RAM pointer, so this can't just call
-// drawBitmap() with the RAM buffer - it needs direct array indexing.
+/**
+ * @brief Draw a 144x32, 1bpp image from a plain RAM buffer.
+ *
+ * Same as drawBitmap(), but reads from a plain RAM buffer instead of
+ * PROGMEM - used for frames received live from the Pico bridge link,
+ * which land in ordinary SRAM (frameBuf below), not flash. pgm_read_byte()
+ * would misinterpret a normal RAM pointer, so this can't just call
+ * drawBitmap() with the RAM buffer - it needs direct array indexing.
+ *
+ * @param fb 144x32 1bpp framebuffer in RAM (FRAME_PIXEL_SIZE bytes).
+ */
 void drawFrameFromRAM(const uint8_t *fb) {
   assert(fb != NULL);
   assert(FRAME_PIXEL_SIZE == 32 * 9 * 2);
@@ -241,17 +275,30 @@ void drawFrameFromRAM(const uint8_t *fb) {
 
 // ---- Raw display-state decode + plot (ported from firmware/hp41_display_bridge.c) -----
 
+/**
+ * @brief Set one pixel in a 1bpp, row-major, MSB-first framebuffer.
+ * @param fb Framebuffer to modify, at least FRAME_PIXEL_SIZE bytes.
+ * @param x  Absolute column, 0-143.
+ * @param y  Absolute row, 0-31.
+ */
 static inline void setPx(uint8_t *fb, int x, int y) {
   assert(fb != NULL);
   assert(x >= 0 && x < 144 && y >= 0 && y < 32);
   fb[y * 18 + x / 8] |= (uint8_t)(0x80 >> (x % 8)); // 18 = 144px / 8 bits-per-byte
 }
 
-// Same raw-code-to-ASCII decode as emu41gcc/display.c's static
-// alpha41() / firmware/hp41_display_bridge.c's hp41_decode_ascii() /
-// tools/powoff_trace.c's decode_ascii() - keep all four in sync if this
-// ever changes. v is the raw HP-41 display code:
-// (lcd_c[i]<<8) | ((lcd_b[i]&3)<<4) | lcd_a[i].
+/**
+ * @brief Decode one HP-41 raw display register code to an ASCII character.
+ *
+ * Same raw-code-to-ASCII decode as emu41gcc/display.c's static
+ * alpha41() / firmware/hp41_display_bridge.c's hp41_decode_ascii() /
+ * tools/powoff_trace.c's decode_ascii() - keep all four in sync if this
+ * ever changes.
+ *
+ * @param v Raw HP-41 display code for one cell:
+ *          (lcd_c[i]<<8) | ((lcd_b[i]&3)<<4) | lcd_a[i].
+ * @return The decoded ASCII character code (0-127).
+ */
 static int decodeAscii(int v) {
   v &= 0x13f;
   assert(v >= 0 && v <= 0x13f);
@@ -288,6 +335,13 @@ static int decodeAscii(int v) {
   return result;
 }
 
+/**
+ * @brief Plot one named character segment's pixels into a character cell.
+ * @param fb       Framebuffer to modify, at least FRAME_PIXEL_SIZE bytes.
+ * @param cellX0   Absolute x offset of this cell's top-left corner.
+ * @param segIndex Segment index into hp41_segment_pixel_offset/_count
+ *                 (0 to HP41_SEG_COMMA_TAIL).
+ */
 static void plotSegment(uint8_t *fb, int cellX0, int segIndex) {
   assert(fb != NULL);
   assert(segIndex >= 0 && segIndex <= HP41_SEG_COMMA_TAIL);
@@ -300,6 +354,12 @@ static void plotSegment(uint8_t *fb, int cellX0, int segIndex) {
   }
 }
 
+/**
+ * @brief Plot one annunciator's pixels (BAT/USER/G/RAD/SHIFT/etc.).
+ * @param fb       Framebuffer to modify, at least FRAME_PIXEL_SIZE bytes.
+ * @param annIndex Index into hp41_annunciator_pixel_offset/_count
+ *                 (0 to HP41_NUM_ANNUNCIATORS-1).
+ */
 static void plotAnnunciator(uint8_t *fb, int annIndex) {
   assert(fb != NULL);
   assert(annIndex >= 0 && annIndex < HP41_NUM_ANNUNCIATORS);
@@ -312,8 +372,16 @@ static void plotAnnunciator(uint8_t *fb, int annIndex) {
   }
 }
 
-// state layout: lcd_a[12], lcd_b[12], lcd_c[12], lcd_ann low byte, high byte
-// (see hp41_arduino_bridge_send_display_state()'s comment on the Pico side).
+/**
+ * @brief Decode a raw display-state packet into a 144x32 pixel framebuffer.
+ *
+ * state layout: lcd_a[12], lcd_b[12], lcd_c[12], lcd_ann low byte, high
+ * byte (see hp41_arduino_bridge_send_display_state()'s comment on the
+ * Pico side).
+ *
+ * @param state DISPLAY_STATE_SIZE bytes of raw display registers.
+ * @param fb    Output framebuffer, at least FRAME_PIXEL_SIZE bytes; fully overwritten.
+ */
 void computeFramebufferFromState(const uint8_t *state, uint8_t *fb) {
   assert(state != NULL);
   assert(fb != NULL);
@@ -365,17 +433,21 @@ void computeFramebufferFromState(const uint8_t *state, uint8_t *fb) {
   }
 }
 
-// Drains any bytes waiting on the Pico link and assembles them into a
-// state packet: [0xAA sync][DISPLAY_STATE_SIZE payload bytes][1
-// XOR-checksum byte]. On a checksum match, decodes it into a pixel
-// framebuffer and draws it; on a mismatch, silently drops it (keeps
-// showing whatever was there before) rather than showing a corrupted
-// image - matches firmware/hp41_arduino_bridge.c on the Pico side.
-//
-// Checked even when no new byte has arrived yet (that's why this isn't
-// nested inside the availability loop below) - otherwise a truly stuck
-// receiver (no more bytes ever coming) could never notice it should
-// give up and resync.
+/**
+ * @brief Drain the Pico link, assemble a display-state packet, and draw it on match.
+ *
+ * Drains any bytes waiting on the Pico link and assembles them into a
+ * state packet: [0xAA sync][DISPLAY_STATE_SIZE payload bytes][1
+ * XOR-checksum byte]. On a checksum match, decodes it into a pixel
+ * framebuffer and draws it; on a mismatch, silently drops it (keeps
+ * showing whatever was there before) rather than showing a corrupted
+ * image - matches firmware/hp41_arduino_bridge.c on the Pico side.
+ *
+ * Checked even when no new byte has arrived yet (that's why this isn't
+ * nested inside the availability loop below) - otherwise a truly stuck
+ * receiver (no more bytes ever coming) could never notice it should
+ * give up and resync.
+ */
 void pollPicoLink() {
   assert(stateBufPos <= DISPLAY_STATE_SIZE); // invariant held across every call
 
@@ -457,6 +529,9 @@ void pollPicoLink() {
 
 // ---- Sketch entry points ---------------------------------------------------
 
+/**
+ * @brief Arduino entry point: init serial links and the LCD, then show a boot self-test pattern.
+ */
 void setup() {
   Serial.begin(9600);
   Serial.print(F("["));
@@ -473,6 +548,9 @@ void setup() {
   drawBitmap(bmp_all_segments);
 }
 
+/**
+ * @brief Arduino main loop: poll the Pico link every iteration.
+ */
 void loop() {
   // 1/2/3 test-pattern switcher disabled while live Pico frames are the
   // real display source - a stray keypress in the Arduino's own Serial

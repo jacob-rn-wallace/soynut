@@ -1,4 +1,6 @@
-/* Native (host) smoke test for the Nut CPU core wiring.
+/**
+ * @file nut_smoke_test.c
+ * @brief Native (host) smoke test for the Nut CPU core wiring.
  *
  * Not part of the firmware - builds and runs on the dev machine with the
  * system compiler, no Pico/ARM toolchain needed. Boots the real HP-41CV
@@ -30,9 +32,15 @@
  * regardless of how cptinstr behaves. */
 #define MAX_BATCHES ((MAX_INSTR / BATCH_SIZE) + 1)
 
-/* Runs the ROM in fixed-size batches until it stops advancing (POWOFF,
- * invalid opcode, breakpoint, or display-dirty) or MAX_INSTR total
- * instructions have run. Returns executeNUT()'s last status code. */
+/**
+ * @brief Run the ROM in fixed-size batches until it stops advancing or a cap is hit.
+ *
+ * Stops early on POWOFF, invalid opcode, breakpoint, or display-dirty,
+ * or once MAX_INSTR total instructions have run.
+ *
+ * @return executeNUT()'s last status code (0=OK/limit, 1=POWOFF,
+ *         2=invalid opcode, 3=breakpoint).
+ */
 static int run_until_settled(void)
 {
     int ret = 0;
@@ -48,6 +56,10 @@ static int run_until_settled(void)
     return ret;
 }
 
+/**
+ * @brief Boot the ROM, run it to completion, and report pass/fail.
+ * @return 0 on pass (no invalid opcode hit), 1 on fail.
+ */
 int main(void)
 {
     char dispbuf[32];

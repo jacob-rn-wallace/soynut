@@ -1,7 +1,9 @@
-/* Native (host) test for firmware/hp41_key_hold_bridge.c - the
- * deterministic, fully-provable half of this session's key-hold-
- * duration fix (see CLAUDE.md's "Known limitation: real key
- * hold-duration is not modeled at all" section).
+/**
+ * @file key_hold_test.c
+ * @brief Native (host) test for firmware/hp41_key_hold_bridge.c - the
+ *        deterministic, fully-provable half of this session's
+ *        key-hold-duration fix (see CLAUDE.md's "Known limitation: real
+ *        key hold-duration is not modeled at all" section).
  *
  * Doesn't need the Nut CPU running at all - just nutcpu.h's
  * flagKB/regK/keybuffer[]/lgkeybuf storage (via
@@ -33,6 +35,9 @@
  * after a fixed ~200 instructions regardless of real duration. */
 #define SUSTAIN_CYCLES 1000
 
+/**
+ * @brief Reset keybuffer[]/lgkeybuf, the key bridge, and hold state to idle.
+ */
 static void reset(void)
 {
     lgkeybuf = 0;
@@ -45,6 +50,10 @@ static void reset(void)
     assert(!hp41_key_hold_active());
 }
 
+/**
+ * @brief Feed each byte of a NUL-terminated string through the key bridge.
+ * @param s Bytes to feed, in order.
+ */
 static void feed(const char *s)
 {
     assert(s != NULL);
@@ -53,6 +62,12 @@ static void feed(const char *s)
     assert(*s == '\0');
 }
 
+/**
+ * @brief Print a labeled pass/fail line for one boolean check.
+ * @param label Human-readable name for this check.
+ * @param cond  The check's result (0 or 1).
+ * @return @p cond, unchanged.
+ */
 static int check(const char *label, int cond)
 {
     assert(label != NULL);
@@ -61,12 +76,16 @@ static int check(const char *label, int cond)
     return cond;
 }
 
-/* "[+A]" should push keycode 0x10 (Sigma+) into keybuffer[] exactly
- * once, same as a plain 'A' would, and begin a real hold; sustain()
- * must then keep re-asserting flagKB/regK across any number of
- * simulated ROM clears, and stop the instant it's released. */
+/** "[+A]" should push keycode 0x10 (Sigma+) into keybuffer[] exactly
+ *  once, same as a plain 'A' would, and begin a real hold; sustain()
+ *  must then keep re-asserting flagKB/regK across any number of
+ *  simulated ROM clears, and stop the instant it's released. */
 #define PRESS_SUSTAIN_RELEASE_CHECK_COUNT 6
 
+/**
+ * @brief Verify a full press/sustain/release cycle via the "[+X]"/"[-]" protocol.
+ * @return Number of failed checks (0 = all pass).
+ */
 static int test_press_sustain_release(void)
 {
     int failures = 0;
@@ -110,11 +129,15 @@ static int test_press_sustain_release(void)
     return failures;
 }
 
-/* A second, independent press/hold/release cycle - the bridge isn't a
- * one-shot - using the single-character tabcode[] fallback ('5')
- * rather than a named_keys[] entry. */
+/** A second, independent press/hold/release cycle - the bridge isn't a
+ *  one-shot - using the single-character tabcode[] fallback ('5')
+ *  rather than a named_keys[] entry. */
 #define SECOND_CYCLE_CHECK_COUNT 3
 
+/**
+ * @brief Verify a second, independent press/hold/release cycle works.
+ * @return Number of failed checks (0 = all pass).
+ */
 static int test_second_cycle(void)
 {
     int failures = 0;
@@ -136,10 +159,15 @@ static int test_second_cycle(void)
     return failures;
 }
 
-/* Edge cases: a two-code chord can't be meaningfully held, and plain
- * "[NAME]" (no +/-) must keep working exactly as before. */
+/** Edge cases: a two-code chord can't be meaningfully held, and plain
+ *  "[NAME]" (no +/-) must keep working exactly as before. */
 #define EDGE_CASE_CHECK_COUNT 2
 
+/**
+ * @brief Verify two-code-chord hold requests are ignored, and plain
+ *        "[NAME]" presses are unaffected by the hold protocol.
+ * @return Number of failed checks (0 = all pass).
+ */
 static int test_edge_cases(void)
 {
     int failures = 0;
@@ -163,6 +191,10 @@ static int test_edge_cases(void)
 #define TOTAL_CHECK_COUNT (PRESS_SUSTAIN_RELEASE_CHECK_COUNT + SECOND_CYCLE_CHECK_COUNT \
                            + EDGE_CASE_CHECK_COUNT)
 
+/**
+ * @brief Run all key-hold check groups and report pass/fail.
+ * @return 0 on pass, 1 on fail.
+ */
 int main(void)
 {
     const int failures = test_press_sustain_release()

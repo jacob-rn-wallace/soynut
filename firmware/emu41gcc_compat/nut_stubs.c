@@ -1,7 +1,9 @@
-/* No-op stand-ins for the peripheral modules emu41gcc expects
- * (timer.h, hpil.h, and the HP82143 printer entry points declared in
- * nut_stubs.h) so nutcpu.c's execp()/storeData()/recallData() have
- * something to link against.
+/**
+ * @file nut_stubs.c
+ * @brief No-op stand-ins for the peripheral modules emu41gcc expects
+ *        (timer.h, hpil.h, and the HP82143 printer entry points declared
+ *        in nut_stubs.h) so nutcpu.c's execp()/storeData()/recallData()
+ *        have something to link against.
  *
  * None of these peripherals are being emulated yet - a base HP-41CV has
  * no clock, HP-IL, or printer module plugged in, so real behavior here
@@ -32,15 +34,25 @@
 
 #include "nut_stubs.h"
 
+/** No HP82143C Time Module plugged in - stub read, no-op. */
 void timer_rd_n(int n)  { (void)n; }
+/** No HP82143C Time Module plugged in - stub write, no-op. */
 void timer_wr_n(int n)  { (void)n; }
+/** No HP82143C Time Module plugged in - stub write, no-op. */
 void timer_wr(void)     { }
+/** No HP82143C Time Module plugged in - stub init, no-op. */
 void init_timer(void)   { }
 
+/** No HP-IL module plugged in - stub init, no-op. */
 void init_hpil(void)        { }
+/** No HP-IL module plugged in - stub write, no-op. */
 void hpil_wr(int reg, int n) { (void)reg; (void)n; }
+/** No HP-IL module plugged in - stub read, always returns 0. */
 int  hpil_rd(int reg)        { (void)reg; return 0; }
 
+/** No HP82143A printer plugged in - stub char-print, no-op. */
 void print_char(int n)          { (void)n; }
+/** No HP82143A printer plugged in - stub status read, always "not present". */
 int  get_printer_status(void)   { return 0; }
+/** No HP82143A printer plugged in - stub flag test, always false/0. */
 int  test_printer_flag(int n)   { (void)n; return 0; }

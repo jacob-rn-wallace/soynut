@@ -1,3 +1,8 @@
+/**
+ * @file hp41_key_hold_bridge.h
+ * @brief Real key press/hold/release tracking, sustained from outside
+ *        emu41gcc's dokey() rather than by modifying it.
+ */
 #ifndef SOYNUT_HP41_KEY_HOLD_BRIDGE_H
 #define SOYNUT_HP41_KEY_HOLD_BRIDGE_H
 
@@ -41,17 +46,40 @@
  * reassertion, exactly reproducing the original bug.
  */
 
+/**
+ * @brief Begin tracking a real press-and-hold of the given HP-41 keycode.
+ *
+ * Pushes @p keycode onto keybuffer[] once (same as a normal tap) and
+ * marks a hold as active so hp41_key_hold_sustain() starts re-asserting
+ * it.
+ *
+ * @param keycode HP-41 keycode being held (0-255).
+ */
 void hp41_key_hold_press(int keycode);
+
+/**
+ * @brief End the currently-tracked hold, if any.
+ */
 void hp41_key_hold_release(void);
 
-/* True for as long as a real hold is in progress - main.c uses this to
- * decide whether to single-step (executeNUT(1), reasserting between
- * every instruction) or run its normal larger batches. */
+/**
+ * @brief Whether a real hold is currently in progress.
+ *
+ * main.c uses this to decide whether to single-step (executeNUT(1),
+ * reasserting between every instruction) or run its normal larger
+ * batches.
+ *
+ * @return true if a hold is active, false otherwise.
+ */
 bool hp41_key_hold_active(void);
 
-/* Re-asserts flagKB=1/regK=<held keycode> if a hold is currently in
- * progress; a no-op otherwise. Call this before every single
- * executeNUT(1) step while hp41_key_hold_active() is true. */
+/**
+ * @brief Re-assert flagKB=1/regK=<held keycode> if a hold is in progress.
+ *
+ * A no-op if no hold is active. Call this before every single
+ * executeNUT(1) step while hp41_key_hold_active() is true - see the
+ * file header's single-stepping rationale.
+ */
 void hp41_key_hold_sustain(void);
 
 #endif /* SOYNUT_HP41_KEY_HOLD_BRIDGE_H */

@@ -1,3 +1,10 @@
+/**
+ * @file st7920.c
+ * @brief ST7920 8-bit parallel bus driver - see st7920.h for the public
+ *        API and CLAUDE.md's "Direct Pico->LCD parallel link" section
+ *        for the hardware validation history.
+ */
+
 #include "st7920.h"
 #include "pins.h"
 
@@ -33,6 +40,17 @@ static const uint DATA_PINS[8] = {
 
 #define BUS_DELAY_US 2 // generous vs. the datasheet's ns-scale address/data setup and E pulse-width figures
 
+/**
+ * @brief Latch one byte onto the ST7920's 8-bit parallel bus.
+ *
+ * Sets RS + the 8 data lines, then pulses E (falling-edge triggered -
+ * see the file header note above) to actually latch the byte.
+ *
+ * @param is_data Whether this is a data byte (true) or command (false); drives RS.
+ * @param value   The byte to write.
+ * @param delay_us Extra settle time to wait after the write completes,
+ *                 matching the datasheet's per-instruction execution time.
+ */
 static void write_byte(bool is_data, uint8_t value, uint32_t delay_us) {
     /* E must already be low when a new transaction begins - the
      * datasheet's falling-edge latch only means something relative to a
@@ -55,10 +73,18 @@ static void write_byte(bool is_data, uint8_t value, uint32_t delay_us) {
     busy_wait_us(delay_us);
 }
 
+/**
+ * @brief Send one command byte with the datasheet's default 72us settle time.
+ * @param cmd Command byte (e.g. one of the CMD_* constants below).
+ */
 static inline void write_cmd(uint8_t cmd) {
     write_byte(false, cmd, 72);
 }
 
+/**
+ * @brief Send one data byte with the datasheet's default 72us settle time.
+ * @param data Data byte, typically one GDRAM word-half.
+ */
 static inline void write_data(uint8_t data) {
     write_byte(true, data, 72);
 }
@@ -73,6 +99,13 @@ static inline void write_data(uint8_t data) {
 #define CMD_CLEAR                          0x01
 #define CMD_GDRAM_ADDR_BASE                0x80
 
+/**
+ * @brief Set the ST7920's GDRAM write address.
+ *
+ * @param vertical   Row (y), 0 to LCD_HEIGHT_PX-1 - see st7920_draw_frame()'s
+ *                   comment for why this maps directly with no bank-fold.
+ * @param horizontal Word offset within the row (0-8, 9 words/row).
+ */
 static void set_gdram_addr(uint8_t vertical, uint8_t horizontal) {
     assert(vertical < LCD_HEIGHT_PX); /* every real caller passes a y coordinate */
     assert(horizontal <= 0x0F);       /* 4-bit field per the datasheet's command layout */
@@ -80,6 +113,9 @@ static void set_gdram_addr(uint8_t vertical, uint8_t horizontal) {
     write_cmd(CMD_GDRAM_ADDR_BASE | (horizontal & 0x0F));
 }
 
+/**
+ * @brief Configure GPIOs and run the ST7920 power-on init sequence; see the header.
+ */
 void st7920_init(void) {
     assert(sizeof(DATA_PINS) / sizeof(DATA_PINS[0]) == 8);
     gpio_init(PIN_LCD_RS);
@@ -114,6 +150,9 @@ void st7920_init(void) {
     write_cmd(CMD_FUNCTION_SET_EXTENDED_GRAPHIC);
 }
 
+/**
+ * @brief Clear the controller's GDRAM directly; see the header.
+ */
 void st7920_clear(void) {
     assert(LCD_BYTES_PER_ROW % 2 == 0); /* the write-two-bytes-at-a-time loop below assumes this */
     assert(LCD_HEIGHT_PX > 0);
@@ -136,6 +175,10 @@ void st7920_clear(void) {
 // "half" of the standard ST7920 128x64 addressing convention. Each row
 // is 9 words (LCD_BYTES_PER_ROW/2 = 18/2 = 9), covering the full 144px
 // width in one contiguous burst after a single address-set.
+/**
+ * @brief Push a full framebuffer to the controller's GDRAM; see the header.
+ * @param fb LCD_FB_SIZE bytes, MSB-first per row, row-major, 1bpp.
+ */
 void st7920_draw_frame(const uint8_t *fb) {
     assert(fb != NULL);
     assert(LCD_BYTES_PER_ROW % 2 == 0); /* see st7920_clear()'s note */

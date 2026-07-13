@@ -1,8 +1,11 @@
-/* Bridges emu41gcc's Nut CPU display registers (lcd_a/b/c/lcd_ann, in
- * emu41gcc/display.c) to the real ST7920 panel, using the compile-time
- * segment/pixel/annunciator tables generated from hp41_font_table.json,
- * hp41_pixel_segment_map.json, and hp41_annunciator_pixel_map.json (see
- * font-tables/gen_display_tables.py).
+/**
+ * @file hp41_display_bridge.c
+ * @brief Bridges emu41gcc's Nut CPU display registers (lcd_a/b/c/lcd_ann,
+ *        in emu41gcc/display.c) to the real ST7920 panel, using the
+ *        compile-time segment/pixel/annunciator tables generated from
+ *        hp41_font_table.json, hp41_pixel_segment_map.json, and
+ *        hp41_annunciator_pixel_map.json (see
+ *        font-tables/gen_display_tables.py).
  */
 
 #include "hp41_display_bridge.h"
@@ -24,13 +27,19 @@ extern unsigned char lcd_b[HP41_NUM_CELLS];
 extern unsigned char lcd_c[HP41_NUM_CELLS];
 extern int lcd_ann;
 
-/* Same raw-code-to-ASCII decode as emu41gcc/display.c's static
+/**
+ * @brief Decode one HP-41 raw display register code to an ASCII character.
+ *
+ * Same raw-code-to-ASCII decode as emu41gcc/display.c's static
  * alpha41() - reimplemented here (rather than exposing that static
  * function, which would mean touching the vendored file) because this
  * exact decode is what's already validated correct: it's what produced
  * "MEMORY LOST" via display_to_buf() in the first Nut CPU boot test
- * (see CLAUDE.md, tests/nut_smoke_test.c). v is the raw HP-41 display
- * code: (lcd_c[i]<<8) | ((lcd_b[i]&3)<<4) | lcd_a[i].
+ * (see CLAUDE.md, tests/nut_smoke_test.c).
+ *
+ * @param v Raw HP-41 display code for one cell:
+ *          (lcd_c[i]<<8) | ((lcd_b[i]&3)<<4) | lcd_a[i].
+ * @return The decoded ASCII character code (0-127).
  */
 static int hp41_decode_ascii(int v)
 {
@@ -73,6 +82,13 @@ static int hp41_decode_ascii(int v)
     return result;
 }
 
+/**
+ * @brief Set one pixel in a 1bpp, row-major, MSB-first framebuffer.
+ *
+ * @param fb Framebuffer to modify, at least LCD_FB_SIZE bytes.
+ * @param x  Absolute column, 0 to LCD_WIDTH_PX-1.
+ * @param y  Absolute row, 0 to LCD_HEIGHT_PX-1.
+ */
 static inline void set_px(uint8_t *fb, int x, int y)
 {
     assert(fb != NULL);
@@ -80,6 +96,14 @@ static inline void set_px(uint8_t *fb, int x, int y)
     fb[y * LCD_BYTES_PER_ROW + x / 8] |= (uint8_t)(0x80 >> (x % 8));
 }
 
+/**
+ * @brief Plot one named character segment's pixels into a character cell.
+ *
+ * @param fb        Framebuffer to modify, at least LCD_FB_SIZE bytes.
+ * @param cell_x0   Absolute x offset of this cell's top-left corner.
+ * @param seg_index Segment index into hp41_segment_pixel_offset/_count
+ *                  (0 to HP41_SEG_COMMA_TAIL).
+ */
 static void plot_segment(uint8_t *fb, int cell_x0, int seg_index)
 {
     assert(fb != NULL);
@@ -92,6 +116,13 @@ static void plot_segment(uint8_t *fb, int cell_x0, int seg_index)
     }
 }
 
+/**
+ * @brief Plot one annunciator's pixels (BAT/USER/G/RAD/SHIFT/etc.).
+ *
+ * @param fb        Framebuffer to modify, at least LCD_FB_SIZE bytes.
+ * @param ann_index Index into hp41_annunciator_pixel_offset/_count
+ *                  (0 to HP41_NUM_ANNUNCIATORS-1).
+ */
 static void plot_annunciator(uint8_t *fb, int ann_index)
 {
     assert(fb != NULL);
@@ -104,6 +135,14 @@ static void plot_annunciator(uint8_t *fb, int ann_index)
     }
 }
 
+/**
+ * @brief Decode the emulator's current display state into an ST7920 framebuffer.
+ *
+ * See hp41_display_bridge.h for the public contract; this is the
+ * implementation.
+ *
+ * @param fb Output buffer, at least LCD_FB_SIZE bytes; fully overwritten.
+ */
 void hp41_display_compute_framebuffer(uint8_t *fb)
 {
     assert(fb != NULL);
@@ -154,6 +193,12 @@ void hp41_display_compute_framebuffer(uint8_t *fb)
     }
 }
 
+/**
+ * @brief Render the current display state straight to the physical LCD.
+ *
+ * See hp41_display_bridge.h for the public contract; this is the
+ * implementation.
+ */
 void hp41_display_render(void)
 {
     static uint8_t framebuf[LCD_FB_SIZE];

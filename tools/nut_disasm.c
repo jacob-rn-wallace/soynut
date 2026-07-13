@@ -1,6 +1,9 @@
-/* Minimal standalone disassembler harness using emu41gcc's own desas41.c
- * (unmodified) against our ROM images, to inspect real ROM code around
- * addresses of interest without guessing from instruction counts alone.
+/**
+ * @file nut_disasm.c
+ * @brief Minimal standalone disassembler harness using emu41gcc's own
+ *        desas41.c (unmodified) against our ROM images, to inspect real
+ *        ROM code around addresses of interest without guessing from
+ *        instruction counts alone.
  *
  * Stubs: ch_label() (symbol lookup - needs external .ADD/.IDX label
  * files from trans.c we don't have; just returns "not found") and
@@ -27,15 +30,28 @@ extern const uint16_t rom_nut0[4096];
 extern const uint16_t rom_nut1[4096];
 extern const uint16_t rom_nut2[4096];
 
-/* Power of 10, Rule 5 note: both parameters are unconditionally
+/**
+ * @brief Stub symbol lookup for desas41.c - no real label table available.
+ *
+ * Power of 10, Rule 5 note: both parameters are unconditionally
  * ignored - there's no real symbol table to validate against (see the
  * file header comment), so there's no precondition or postcondition
- * beyond "always returns 0" to check. */
+ * beyond "always returns 0" to check.
+ *
+ * @param adr Ignored.
+ * @param s   Ignored.
+ * @return Always 0 ("not found").
+ */
 int ch_label(long adr, char *s) {
     (void)adr; (void)s;
     return 0;
 }
 
+/**
+ * @brief Decode one HP-41 CON-string display code to a printable ASCII char.
+ * @param v Raw display code.
+ * @return The decoded character.
+ */
 char char41(int v) {
     char c;
     v &= 0x13f;
@@ -52,6 +68,11 @@ char char41(int v) {
 
 extern int desas(int adr, int *codes, char *ligne);
 
+/**
+ * @brief Fetch one 10-bit ROM word by absolute 16-bit HP-41 address.
+ * @param addr Absolute address (page = top 4 bits, offset = low 12 bits).
+ * @return The ROM word at that address (0 for an unwired page).
+ */
 static int fetch_word(int addr) {
     int page = (addr >> 12) & 0xF;
     int off = addr & 0xFFF;
@@ -72,6 +93,12 @@ static int fetch_word(int addr) {
  * Rule 2). */
 #define MAX_DISASM_COUNT (3 * 4096)
 
+/**
+ * @brief Entry point: disassemble a run of instructions starting at a given address.
+ * @param argc Argument count; expects 3 (program name + 2 args).
+ * @param argv argv[1]=start address in hex, argv[2]=instruction count.
+ * @return 0 on success, 1 on bad usage.
+ */
 int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: %s <start_addr_hex> <num_instructions>\n", argv[0]);

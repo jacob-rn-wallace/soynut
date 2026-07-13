@@ -1,10 +1,14 @@
-/* Host-side single-step trace of real HP-41 key sequences through
- * emu41gcc's actual ROM, watching the decoded display content (not just
- * PC/status bits) change over time - built to test a specific
- * hypothesis: is the "screen goes blank, catches up next key" bug (see
- * CLAUDE.md) caused by the ROM legitimately writing blank content to
- * lcd_a/b/c before the correct result, with our system freezing (POWOFF)
- * before ever reaching the correct write - or is it something else?
+/**
+ * @file powoff_trace.c
+ * @brief Host-side single-step trace of real HP-41 key sequences through
+ *        emu41gcc's actual ROM, watching the decoded display content
+ *        (not just PC/status bits) change over time.
+ *
+ * Built to test a specific hypothesis: is the "screen goes blank,
+ * catches up next key" bug (see CLAUDE.md) caused by the ROM
+ * legitimately writing blank content to lcd_a/b/c before the correct
+ * result, with our system freezing (POWOFF) before ever reaching the
+ * correct write - or is it something else?
  *
  * Build: make -C tools   (see tools/Makefile), then ./tools/build/powoff_trace
  */
@@ -26,8 +30,15 @@ extern unsigned char lcd_b[12];
 extern unsigned char lcd_c[12];
 extern int lcd_ann;
 
-/* Same decode as firmware/hp41_display_bridge.c's hp41_decode_ascii() -
- * kept in sync by hand, see that file's own comment for provenance. */
+/**
+ * @brief Decode one HP-41 raw display register code to an ASCII character.
+ *
+ * Same decode as firmware/hp41_display_bridge.c's hp41_decode_ascii() -
+ * kept in sync by hand, see that file's own comment for provenance.
+ *
+ * @param v Raw HP-41 display code for one cell.
+ * @return The decoded ASCII character code.
+ */
 static int decode_ascii(int v) {
     v &= 0x13f;
     assert(v >= 0 && v <= 0x13f);
@@ -64,6 +75,10 @@ static int decode_ascii(int v) {
     return result;
 }
 
+/**
+ * @brief Decode the current lcd_a/b/c[12] registers to a 12-char ASCII string.
+ * @param out Output buffer, at least 13 bytes (12 chars + NUL).
+ */
 static void render_display(char *out /* [13] */) {
     assert(out != NULL);
     for (int pos = 0; pos < 12; pos++) {
@@ -79,6 +94,11 @@ static char last_display[13] = "";
 static int last_ann = -1;
 static char last_rendered_display[13] = "\x01"; /* sentinel: nothing rendered yet */
 
+/**
+ * @brief Print a trace line only when the decoded display/annunciators
+ *        actually changed since the last call.
+ * @param tag Short label identifying the current phase, for the log line.
+ */
 static void check_display_change(const char *tag) {
     assert(tag != NULL);
     char cur[13];
@@ -92,10 +112,22 @@ static void check_display_change(const char *tag) {
     }
 }
 
-/* Runs until POWOFF/invalid/2000 steps, printing every time the decoded
- * display content actually changes (not every instruction - that alone
- * tells us whether blank content is really being written by the ROM, or
- * whether we're just freezing before a later, correct write happens). */
+/**
+ * @brief Single-step the ROM until POWOFF/invalid opcode/step cap, tracing display changes.
+ *
+ * Prints every time the decoded display content actually changes (not
+ * every instruction - that alone tells us whether blank content is
+ * really being written by the ROM, or whether we're just freezing
+ * before a later, correct write happens), plus one line per fdsp
+ * "frame" (exactly what main.c would have sent to the display) and a
+ * final POWOFF summary comparing true final state against the last
+ * rendered frame.
+ *
+ * @param tag       Short label identifying the current phase, for log lines.
+ * @param max_steps Fixed cap on single-stepped instructions (Power of
+ *                  10, Rule 2) - gives up and returns if exceeded.
+ * @return The last executeNUT() status code.
+ */
 static int run_until_powoff(const char *tag, int max_steps) {
     assert(tag != NULL);
     assert(max_steps > 0);
@@ -138,6 +170,11 @@ static int run_until_powoff(const char *tag, int max_steps) {
     return ret;
 }
 
+/**
+ * @brief Wake the calculator from POWOFF with one keycode, then trace until it settles.
+ * @param tag  Short label identifying this wake, for log lines.
+ * @param code HP-41 keycode to push before waking.
+ */
 static void wake_with_key(const char *tag, unsigned char code) {
     assert(tag != NULL);
     assert(lgkeybuf >= 0 && lgkeybuf < 8); /* keybuffer[]'s real capacity */
@@ -148,6 +185,11 @@ static void wake_with_key(const char *tag, unsigned char code) {
     run_until_powoff(tag, 2000);
 }
 
+/**
+ * @brief Boot the ROM, then replay a specific reported key sequence
+ *        while tracing display state.
+ * @return Always 0.
+ */
 int main(void) {
     nut_boot();
     assert(regPC == 0);

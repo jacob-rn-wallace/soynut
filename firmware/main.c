@@ -1,3 +1,22 @@
+/**
+ * @file main.c
+ * @brief Full system integration: boots the HP-41 ROM on the emulated Nut
+ *        CPU core, drives the ST7920 LCD, and feeds USB-serial keypresses
+ *        into the emulator's keyboard buffer.
+ *
+ * Display output goes directly to the LCD over st7920.c's 8-bit parallel
+ * drive - see CLAUDE.md "Direct Pico->LCD parallel link" and pins.h. The
+ * Arduino bridge (hp41_arduino_bridge.h/.c) is kept intact but dormant -
+ * see pins.h's "Arduino display bridge" note for how to swap back to it
+ * if the direct link ever needs to be bypassed.
+ *
+ * Display bring-up's static test bitmaps (bitmaps.c/.h) are still built
+ * but no longer called here either - kept around as a hardware-debugging
+ * aid (wire up a temporary call to them if the real display output is
+ * dark/wrong and you need to isolate a wiring problem from a software
+ * one).
+ */
+
 #include "pico/stdlib.h"
 #include <assert.h>
 #include <stdio.h>
@@ -20,10 +39,24 @@
 // clocks aren't synchronized with each other (each just counts from its
 // own power-on/reset), so this only gives useful correlation if both are
 // power-cycled at roughly the same moment.
-/* Power of 10, Rule 5 note: fmt!=NULL is the only real precondition
+/**
+ * @brief printf()-style debug log line, prefixed with milliseconds since boot.
+ *
+ * TEMPORARY: the timestamp prefix lets this board's log be lined up
+ * chronologically against the Arduino bridge's own millis()-timestamped
+ * log (see NHD14432_DisplayBridge.ino) during hardware bring-up. The two
+ * boards' clocks are not synchronized - each just counts from its own
+ * power-on/reset - so this only gives useful correlation if both are
+ * power-cycled at roughly the same moment.
+ *
+ * @param fmt printf()-style format string; must be non-NULL.
+ * @param ... printf()-style arguments matching @p fmt.
+ *
+ * Power of 10, Rule 5 note: fmt!=NULL is the only real precondition
  * this function has - its whole job is "prefix a timestamp, forward
  * the rest to vprintf" - so a second assertion here would just restate
- * that forwarding rather than check anything new. */
+ * that forwarding rather than check anything new.
+ */
 static void dbg(const char *fmt, ...) {
     assert(fmt != NULL);
     printf("[%lums] ", (unsigned long)to_ms_since_boot(get_absolute_time()));
@@ -33,53 +66,48 @@ static void dbg(const char *fmt, ...) {
     va_end(args);
 }
 
-// The real Nut CPU runs at roughly tens-to-a-few-hundred kHz - this
-// target (~200,000 instructions/sec) is an approximate, commonly-cited
-// figure, not a cycle-exact one; getting it perfect isn't the point,
-// just getting ROM-side timing assumptions (auto-power-off, key
-// debounce) into a human-usable range instead of the ~1.4 MILLION
-// instructions/sec this Pico actually runs the core at, which was
-// observed on real hardware to blow through the ROM's own shutdown
-// timer before a human (or even a quick scripted keypress) could react.
+/** Throttle target for executeNUT(), in emulated Nut CPU instructions/sec.
+ *
+ * The real Nut CPU runs at roughly tens-to-a-few-hundred kHz - this
+ * target (~200,000 instructions/sec) is an approximate, commonly-cited
+ * figure, not a cycle-exact one; getting it perfect isn't the point,
+ * just getting ROM-side timing assumptions (auto-power-off, key
+ * debounce) into a human-usable range instead of the ~1.4 MILLION
+ * instructions/sec this Pico actually runs the core at, which was
+ * observed on real hardware to blow through the ROM's own shutdown
+ * timer before a human (or even a quick scripted keypress) could react.
+ */
 #define TARGET_INSTRUCTIONS_PER_SEC 200000
 
-// Full system bring-up: boots the real HP-41 OS ROM (roms/rom_images.c,
-// wired via emu41gcc_compat/nut_rom.c), computes the emulator's LCD state
-// into a framebuffer (hp41_display_bridge.c) whenever it flags a display
-// change, and feeds USB serial bytes into the keyboard buffer
-// (hp41_key_bridge.c). See CLAUDE.md step 6.
-//
-// *** Display output goes directly to the LCD over firmware/st7920.c's
-// 8-bit parallel drive - see CLAUDE.md "Hardware" and pins.h. The
-// Arduino bridge (hp41_arduino_bridge.h/.c) is kept intact but dormant,
-// not deleted - see pins.h's "Arduino display bridge" note for how to
-// swap back to it if the direct link ever needs to be bypassed. ***
-//
-// Display bring-up's static test bitmaps (bitmaps.c/.h) are still built
-// but no longer called here either - kept around as a hardware-debugging
-// aid (wire up a temporary call to them if the real display output is
-// dark/wrong and you need to isolate a wiring problem from a software one).
-
-// Drains any pending USB serial keypresses without blocking. Factored
-// out so it can be called both once per outer-loop iteration (the
-// normal case) and once per single-stepped instruction while a key
-// hold is in progress - see the main loop's hold-handling block below
-// for why the latter matters: checking for an incoming "[-]" release
-// only once per up-to-1000-instruction batch (as an earlier version of
-// this fix did) meant a real release sitting in the USB buffer wasn't
-// even looked at until that whole batch completed, artificially
-// sustaining every tap - however fast - past the ROM's own blink
-// threshold (see CLAUDE.md's "Real key hold-duration" section).
-// Power of 10, Rule 2: CLAUDE.md flags this loop by name as the one
-// existing pattern that isn't trivially bounded - it only terminates
-// because the USB FIFO is finite, not because anything here counts.
-// MAX_BYTES_PER_DRAIN adds an explicit, provable cap (well above any
-// realistic single burst - keybuffer[] itself caps useful input at 8
-// pending keys) as a defensive backstop, without changing normal
-// behavior at all: a real USB FIFO drains in well under this many
-// iterations every time.
+/** Defensive upper bound on getchar_timeout_us() calls per drain_usb_bytes()
+ *  call (Power of 10, Rule 2) - see that function's header for why this
+ *  loop otherwise has no provable bound of its own. Set well above any
+ *  realistic single USB burst; keybuffer[]'s own 8-slot cap means a real
+ *  drain always finishes in well under this many iterations. */
 #define MAX_BYTES_PER_DRAIN 256
 
+/**
+ * @brief Drain any pending USB serial bytes into the key bridge, without blocking.
+ *
+ * Factored out so it can be called both once per outer-loop iteration
+ * (the normal case) and once per single-stepped instruction while a key
+ * hold is in progress - see the main loop's hold-handling block below
+ * for why the latter matters: checking for an incoming "[-]" release
+ * only once per up-to-1000-instruction batch (as an earlier version of
+ * this fix did) meant a real release sitting in the USB buffer wasn't
+ * even looked at until that whole batch completed, artificially
+ * sustaining every tap - however fast - past the ROM's own blink
+ * threshold (see CLAUDE.md's "Real key hold-duration" section).
+ *
+ * Power of 10, Rule 2: CLAUDE.md flags this loop by name as the one
+ * existing pattern that isn't trivially bounded - it only terminates
+ * because the USB FIFO is finite, not because anything here counts.
+ * MAX_BYTES_PER_DRAIN adds an explicit, provable cap (well above any
+ * realistic single burst - keybuffer[] itself caps useful input at 8
+ * pending keys) as a defensive backstop, without changing normal
+ * behavior at all: a real USB FIFO drains in well under this many
+ * iterations every time.
+ */
 static void drain_usb_bytes(void) {
     int c;
     int drained = 0;
@@ -97,6 +125,22 @@ static void drain_usb_bytes(void) {
     assert(lgkeybuf >= 0 && lgkeybuf <= 8);
 }
 
+/**
+ * @brief Entry point: bring up hardware, boot the ROM, then run forever.
+ *
+ * Per main-loop iteration: drains pending USB keypresses (always, even
+ * while asleep, since a key is what wakes it); if asleep and a key is
+ * now queued, resets regPC/flagKey and wakes; otherwise skips
+ * executeNUT() entirely while asleep; else runs executeNUT(1000)
+ * (single-stepping instead, sustaining the key-hold state, if a hold
+ * is active); throttles via sleep_us() to TARGET_INSTRUCTIONS_PER_SEC;
+ * on fdsp, computes/checksums/pushes a new framebuffer to the LCD; on
+ * POWOFF, goes to sleep; on an invalid opcode, halts. See CLAUDE.md's
+ * "main.c" section for the full walkthrough.
+ *
+ * @return Never returns - this is bare-metal firmware with no OS to
+ *         return control to.
+ */
 int main(void) {
     stdio_init_all();
 

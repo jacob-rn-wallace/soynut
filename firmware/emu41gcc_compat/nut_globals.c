@@ -1,5 +1,7 @@
-/* Instantiates storage for nutcpu.h's GLOBAL-declared CPU state (regA,
- * regB, regC, tabpage, typmod, espaceRAM, keybuffer, etc.).
+/**
+ * @file nut_globals.c
+ * @brief Instantiates storage for nutcpu.h's GLOBAL-declared CPU state
+ *        (regA, regB, regC, tabpage, typmod, espaceRAM, keybuffer, etc.).
  *
  * In upstream emu41gcc this is emu41.c's job (it's the one file that
  * #define GLOBAL's to nothing instead of extern before including

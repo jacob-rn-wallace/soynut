@@ -204,6 +204,74 @@ any future edits to `Arduino NHD14432/NHD14432_DisplayBridge/*.ino`
       currently enforces this automatically on every build the way the
       CMake/Makefile targets do.
 
+## Commenting standard
+
+This project's own code is fully commented, to the same standard/scope
+as the Power of 10 pass above — **applied repo-wide, not just a
+forward-looking policy**: every in-scope file's functions/classes got a
+doc-comment header in the pass that added this section, verified by a
+full clean rebuild of every target (native tests, the ARM firmware,
+`lcd_bringup`, the native `tools/` binaries, and the Arduino sketch)
+plus a zero-warning `ruff`/`mypy` pass. New code should keep meeting
+this bar going forward — a function/file without a doc comment is
+incomplete, the same way an uncompiled warning would be.
+
+**Scope:** identical to the Power of 10 section's "Scope"/"Does NOT
+apply to" lists above — this project's own original C/Arduino-sketch
+code and Python tooling, not `emu41gcc/`, `pico-sdk/`, or
+`NHD14432_POC/`.
+
+**C, and the Arduino sketch (project-authored, C-like — same files the
+Power of 10 section holds to C rules):** Doxygen-style `/** ... */`.
+- Every file gets a `@file`/`@brief` header block at the top.
+- Every function — including `static` helpers — gets a `/** @brief ...
+  */` block: a one-line summary, then `@param`/`@return` for anything
+  non-`void`/non-trivial. A genuinely trivial one-line wrapper (e.g.
+  `write_cmd()` in `st7920.c`) can skip `@param`/`@return` if the
+  summary line already says it all.
+- A `struct`/`typedef` or a `#define` whose name doesn't already explain
+  the "why" gets its own `/** ... */` (or `/** @name ... @{ ... @} */`
+  for a related group of macros).
+- Inline `//`/`/* */` comments still cover non-obvious logic *inside* a
+  function body (bit-packing, timing-sensitive hardware sequences,
+  state machines) exactly as the top-level system prompt's default
+  commenting guidance describes — the Doxygen header is what's new
+  here, not a replacement for that.
+- Not currently enforced by a build-time tool (no `doxygen`/coverage
+  check wired into CMake or the Makefiles) — same "confirmed clean but
+  not automated" caveat as the Arduino warning-level check just above.
+  Holding the line here is a code-review/self-review responsibility,
+  not a compiler gate.
+
+**Python (`tools/*.py`, `font-tables/gen_display_tables.py`,
+`roms/*.py`):** Google-style docstrings, PEP 257-compliant.
+- Every module gets a top-of-file docstring (already the norm here).
+- Every function/method gets a docstring: a one-line summary (its own
+  line, blank line, then any extended description — pydocstyle's D205
+  enforces this split), plus `Args:`/`Returns:`/`Raises:` sections for
+  anything not self-evident from the signature alone. A
+  `TypedDict`/dataclass-like structure gets an `Attributes:` section.
+- **This one *is* enforced by tooling**, not just convention:
+  `pyproject.toml`'s `[tool.ruff.lint]` `select = ["ALL"]` no longer
+  ignores pydocstyle's `"D"` codes, and `[tool.ruff.lint.pydocstyle]`
+  pins `convention = "google"` — `ruff check .` fails the same way a
+  missing/malformed docstring would fail any other Rule 10 lint check.
+
+**Generated files are the one exception — document the *generator*,
+not its output.** `font-tables/hp41_display_tables.c`, `Arduino
+NHD14432/NHD14432_DisplayBridge/hp41_display_tables_avr.h`, `Arduino
+NHD14432/NHD14432_DisplayBridge/bitmaps.h`, and the gitignored
+`roms/rom_images.c` are all regenerated wholesale by their respective
+scripts (`font-tables/gen_display_tables.py`,
+`Arduino NHD14432/NHD14432_DisplayBridge/convert_images.py`,
+`roms/rom_to_c.py`) — hand-added comments there would just be silently
+discarded next run. Each already carries an "Auto-generated — do not
+hand-edit" header from its generator; that's sufficient. Put real
+documentation in the generator script itself, and in the
+hand-maintained header that declares the generated arrays (e.g.
+`font-tables/hp41_display_tables.h`, which is *not* generated — it's
+hand-written and does get the full Doxygen treatment) instead.
+
 ## Hardware
 
 - **Display:** Newhaven NHD-14432WG-BTFH-VT, ST7920 controller, 144x32
