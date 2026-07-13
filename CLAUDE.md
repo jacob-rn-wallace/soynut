@@ -33,7 +33,10 @@ tied straight to GND and needs no shifter channel). Both the cold-start
 confirmed on the physical glass. Press-and-hold key behavior (USER-mode
 label flash / nullify-on-long-hold) is implemented and confirmed. The
 calculator auto-powers-off after each keypress the same way the real ROM
-timeout logic does — see "Known unknowns" for what's still open.
+timeout logic does. Continuous memory (see "Continuous memory" below) is
+also confirmed: calculator state now survives a reset/power cycle via
+flash, the same way the real HP-41's battery-backed CMOS RAM would —
+see "Known unknowns" for what's still open.
 
 The Arduino Uno display bridge (the *previous* active display path,
 before the parallel level-shifter setup above replaced it) is kept fully
@@ -590,14 +593,121 @@ this project instead sustains the state directly from outside:
 `named_keys[]` entry, or any single character resolved via `tabcode[]`);
 `"[-]"` releases whatever's currently held (only one key tracked at a
 time). Two-code combos (`BST`) can't be meaningfully held and are
-silently ignored.
+silently ignored. **`ON` is also rejected outright** (`resolve_hold_code()`
+special-cases it before either lookup) — found via real-hardware
+debugging of a reported bug ("the GUI's ON key doesn't seem to power
+off"): a GUI click held past `HOLD_ENGAGE_MS` (150ms, easy to exceed
+with an ordinary mouse click) engaged this same hold protocol for `ON`,
+and since `ON` is a power toggle rather than a USER-mode-assignable
+function key, it was never exercised against the sustained
+resustain-every-instruction mechanism the way `SIGMA+`/`A` was in
+`tests/hold_trace_test.c` — on real hardware this drove the ROM into an
+unbounded spin, **106,000+ instructions** before the release finally
+registered and toggled power, a multi-second stall easily mistaken for
+"doesn't work" rather than "very slow." Fixed at both layers: the
+firmware rejects `"[+ON]"` as a no-op (confirmed on real hardware:
+`lgkeybuf`/`cptinstr` now stay completely flat across a held-then-released
+`ON`, zero spin), and `tools/hp41_keyboard_gui.py`'s `ALWAYS_TAP_KEYS`
+set makes the GUI send `ON` as a plain instant tap regardless of the
+active `PressMode`, so it never even attempts the now-rejected path.
+Plain-tap `ON` (unaffected by this fix, since `handle_named_key()` was
+never touched) was independently reconfirmed still correctly toggles
+power off on real hardware.
 
-Verified via `tests/key_hold_test.c` (11 checks, simulating the ROM's
-own repeated `flagKB`/`regK`-clearing) and `tests/hold_trace_test.c`
+Verified via `tests/key_hold_test.c` (13 checks, simulating the ROM's
+own repeated `flagKB`/`regK`-clearing, including the `"[+ON]"`
+rejection and a follow-up `"[-]"` no-op) and `tests/hold_trace_test.c`
 (boots the real ROM, holds a real function key via the wire protocol,
 single-stepping like `main.c`) — a short tap never nullifies; an
 unreleased hold drives the ROM into the nullify branch at exactly the
 expected instruction count.
+
+## Continuous memory — `firmware/hp41_persist_state.h`/`.c`, `firmware/hp41_persist_flash.h`/`.c`
+
+The real HP-41 keeps its RAM alive across power-off via battery-backed
+CMOS ("continuous memory") — pulling the batteries is what produces
+`MEMORY LOST`. This project has no battery, but the Pico's own on-die
+QSPI flash holds its contents with zero power, so it stands in for that
+CMOS: the calculator's RAM/CPU state survives unplugging the Pico
+entirely, and only shows `MEMORY LOST` on a genuinely first-ever boot,
+an invalid/corrupted snapshot, or an explicit `[CLRMEM]` request (below).
+
+Split into the same pure-logic/hardware pattern as the display bridge
+(`hp41_display_compute_framebuffer()` vs `st7920_draw_frame()`):
+
+- **`hp41_persist_state.h`/`.c`** (pure, no pico-sdk dependency, host-
+  testable): `hp41_persist_state_t` is a flat, versioned/checksummed
+  struct holding the subset of `emu41gcc`'s globals that constitute real
+  HP-41 "memory" — `espaceRAM[8200]`, `regA-N[14]`, `regST`, `regPQ`,
+  `regG`, `Carry`, `regK`, `regFO`, `regFI`, `regPT`, `flagdec`,
+  `regData`, `regPer`, and the printer flags (`mode_printer`,
+  `flagPrter`, `flagPrx`, `flagAdv`). `hp41_persist_capture()`/
+  `hp41_persist_apply()` snapshot/restore those globals;
+  `hp41_persist_validate()` checks a magic number + version + FNV-1a
+  checksum, safely rejecting erased flash (reads back as all `0xFF`) or
+  a struct saved by a different firmware version's layout.
+  Deliberately **excludes** key-scan/execution/render bookkeeping
+  (`regPC`, `flagKey`, `flagKB`, `cptKey`, `keybuffer[]`/`lgkeybuf`,
+  `smartp`, `breakcode`, `selper`, `cptinstr`, `fjmp`, `dspon`,
+  `facces_dsp`, `fdsp`) — restoring those verbatim risks resurrecting a
+  stuck mid-instruction/mid-keypress state, and they already reset
+  correctly on their own via the wake path below.
+- **`hp41_persist_flash.h`/`.c`** (ARM/pico-sdk only, never linked into
+  the host-native test build): reserves the last 3 flash sectors
+  (12 KiB, at `PICO_FLASH_SIZE_BYTES - 3*FLASH_SECTOR_SIZE`) for the
+  snapshot — comfortably clear of the firmware image itself (~150 KiB,
+  placed from the start of a 4 MiB chip). `hp41_persist_flash_load()`
+  reads directly from the XIP-mapped flash address (no SDK call needed
+  for reads) and validates it. `hp41_persist_flash_save()` first
+  compares against what's already on flash and skips the erase/program
+  cycle entirely if nothing changed — the flash-wear guard that makes
+  calling it on every `POWOFF` safe long-term. `hp41_persist_flash_erase()`
+  wipes the region outright.
+
+**Wiring in `firmware/main.c`:** deliberately reuses the exact same,
+already-hardware-validated `POWOFF`→wake transition the emulator already
+had, rather than inventing a new boot path. At boot, right after
+`nut_boot()`'s unconditional ROM-wiring/cold-start defaults,
+`hp41_persist_flash_load()` + `hp41_persist_apply()` restore a valid
+snapshot if one exists and set `asleep = true` — the existing
+`flagKey=0`/`regPC=0` wake block (see "Key bridge" above) then takes
+over on the very next keypress exactly as it already does for a same-
+session `POWOFF`→wake, with zero duplicated reset logic. This also
+matches real continuous-memory HP-41 power-on semantics: it doesn't
+unprompted redraw/run, it waits for you to press ON. At `POWOFF`,
+`hp41_persist_capture()` + `hp41_persist_flash_save()` save the current
+state right before going to sleep. Since auto-power-off already fires
+after essentially every keypress (see "Known unknowns" below), this
+gives near-continuous persistence with only a small, honestly-documented
+gap: a literal power yank *between* keypresses, before the next
+auto-`POWOFF` fires, loses that in-flight session. No separate
+timer-based save exists — the change-detection guard above plus that
+already-tiny window make one unnecessary.
+
+**`[CLRMEM]`** (`firmware/hp41_key_bridge.c`, a bridge-level command, not
+a real HP-41 key — deliberately handled in `main.c`, not inside the key
+bridge itself, which stays pure/host-testable and has no business
+touching flash or CPU state): erases the persisted snapshot
+(`hp41_persist_flash_erase()`), re-runs `nut_boot()`'s cold-start reset
+plus an explicit `espaceRAM` clear (since `nut_boot()` itself never
+touches `espaceRAM` — see "ROM wiring" above), and drops out of
+`asleep` so the ROM's own cold-start code runs immediately — the
+deliberate way to get `MEMORY LOST` back without reflashing firmware.
+
+Verified via `tests/persist_state_test.c` (13 checks: a full
+capture/wipe/apply round trip across every persisted field group, plus
+`hp41_persist_validate()` rejecting an all-zero struct, erased-flash
+content, a flipped checksum bit, and a version mismatch, each checked
+against a genuine positively-accepted snapshot). The flash-touching half
+(`hp41_persist_flash.c`) has no host-native equivalent — same as
+`st7920_draw_frame()`, real confirmation needs real hardware, and this
+has been done: a value entered and committed with `ENTER` survived a
+genuine reset and reappeared with the exact same rendered-display
+checksum, confirmed across two independent reset cycles, and
+`[CLRMEM]`'s erasure was confirmed to persist too (not just the live
+state) — see "Known unknowns" for the full results and one caveat found
+along the way (reflashing the firmware, as opposed to a plain reset or
+power cycle, currently wipes the persisted region).
 
 ## Software keyboard GUI — `tools/hp41_keyboard_gui.py`
 
@@ -895,19 +1005,24 @@ investigation is ever resumed.
 - **`hp41_arduino_bridge.h`/`.c`** — the dormant fallback display path
   (see "Arduino display bridge" above).
 - **`hp41_display_bridge.h`/`.c`**, **`hp41_key_bridge.h`/`.c`**,
-  **`hp41_key_hold_bridge.h`/`.c`** — see their sections above.
+  **`hp41_key_hold_bridge.h`/`.c`**, **`hp41_persist_state.h`/`.c`**,
+  **`hp41_persist_flash.h`/`.c`** — see their sections above.
 - **`main.c`** — full system integration. `stdio_init_all()`, then
-  `st7920_init()`/`st7920_clear()`, then `nut_boot()`. Main loop per
-  iteration: drain pending USB bytes into the key bridge (always, even
-  asleep, since a key is what wakes it); if asleep and a key is now
-  queued, reset `regPC=0`/`flagKey=0` and wake; otherwise if asleep,
-  skip `executeNUT()` entirely; else run `executeNUT(1000)` (single-step
-  instead, sustaining the key-hold state, if a hold is active), throttle
-  via `sleep_us()`; on `fdsp`, compute the framebuffer, checksum it, and
-  push it straight to the LCD via `st7920_draw_frame()` (no pacing
-  needed — unlike the old Arduino path, there's no second,
-  independently-clocked board's receive/draw timing to coordinate
-  with); on `POWOFF`, go to sleep; once/second,
+  `st7920_init()`/`st7920_clear()`, then `nut_boot()`, then a
+  `hp41_persist_flash_load()` attempt (see "Continuous memory" above) -
+  either restores a valid snapshot and starts `asleep`, or leaves
+  `nut_boot()`'s cold-start defaults in place. Main loop per iteration:
+  drain pending USB bytes into the key bridge (always, even asleep,
+  since a key is what wakes it); handle a pending `[CLRMEM]` request, if
+  any; if asleep and a key is now queued, reset `regPC=0`/`flagKey=0`
+  and wake; otherwise if asleep, skip `executeNUT()` entirely; else run
+  `executeNUT(1000)` (single-step instead, sustaining the key-hold
+  state, if a hold is active), throttle via `sleep_us()`; on `fdsp`,
+  compute the framebuffer, checksum it, and push it straight to the LCD
+  via `st7920_draw_frame()` (no pacing needed — unlike the old Arduino
+  path, there's no second, independently-clocked board's receive/draw
+  timing to coordinate with); on `POWOFF`, capture and save a
+  persistence snapshot, then go to sleep; once/second,
   print a heartbeat (`PC`/`cptinstr`/`lgkeybuf`/`flagKey`/`regK`/`ret`/
   `asleep`) so a genuine hang is distinguishable from normal sleep. Debug
   logging throughout is lightweight (checksum + heartbeat + byte echo) —
@@ -1113,6 +1228,34 @@ DEVLOG.md        Session-by-session development history (gitignored,
 
 ## Known unknowns / next steps
 
+- **Continuous memory (flash persistence)**: confirmed working on real
+  hardware. A value entered and committed with `ENTER` (display checksum
+  `0xE3`) survived a genuine reset (`picotool reboot -f`, no `-u`/BOOTSEL
+  involved — the CPU fully re-executes from the reset vector with BSS
+  zeroed, same as a real power-cycle from the firmware's point of view)
+  and reappeared with the exact same checksum after waking — repeated
+  successfully across two independent reset cycles. `[CLRMEM]` was also
+  confirmed: it live-reruns the ROM's cold-start `MEMORY LOST` sequence,
+  and that erased state is itself what a subsequent reset restores (i.e.
+  the erasure itself persists, not just the live state).
+  **Caveat found during this testing, not previously anticipated:**
+  reflashing the firmware via a BOOTSEL UF2 drag-and-drop (`picotool
+  reboot -f -u` + copying the `.uf2` onto the mounted volume) wipes the
+  persisted region, even though the reserved flash offset is nowhere
+  near the addresses the `.uf2` file actually covers — most likely the
+  RP2350 boot ROM's mass-storage UF2 write path erases a broader region
+  than just the blocks present in the file. A genuine power cycle or
+  software reset does **not** have this problem, only a firmware
+  reflash does — acceptable for now (a firmware update legitimately
+  resetting user memory isn't unreasonable), but worth knowing before
+  relying on it, and worth revisiting if it turns out to matter (e.g. a
+  smaller, more surgical `picotool load` invocation instead of a full
+  drag-and-drop might avoid it). Separately, `picotool reboot -f`
+  itself was unreliable when scripted here — it intermittently hangs
+  after sending the reboot command (the device resets fine regardless;
+  only the tool's own post-reboot wait/probe seems to hang) — matching
+  the `-a -f` hang CLAUDE.md already documents for the BOOTSEL variant,
+  just not previously known to also affect plain `-f`.
 - **Direct Pico→LCD serial link**: protocol/timing fully verified, still
   never lit up the display — superseded by the working direct *parallel*
   link, so no longer blocking anything; low priority to revisit. See

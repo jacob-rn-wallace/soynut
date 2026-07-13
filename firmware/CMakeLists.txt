@@ -36,6 +36,8 @@ add_executable(soynut
         hp41_key_bridge.c
         hp41_key_hold_bridge.c
         hp41_arduino_bridge.c
+        hp41_persist_state.c
+        hp41_persist_flash.c
         ${EMU41GCC_DIR}/nutcpu.c
         ${EMU41GCC_DIR}/display.c
         emu41gcc_compat/nut_stubs.c
@@ -64,6 +66,7 @@ set_source_files_properties(
         emu41gcc_compat/nut_rom.c
         hp41_key_bridge.c
         hp41_key_hold_bridge.c
+        hp41_persist_state.c
         main.c
         PROPERTIES COMPILE_OPTIONS "-fcommon"
 )
@@ -103,6 +106,8 @@ set(SOYNUT_OWN_SOURCES
         hp41_key_bridge.c
         hp41_key_hold_bridge.c
         hp41_arduino_bridge.c
+        hp41_persist_state.c
+        hp41_persist_flash.c
         emu41gcc_compat/nut_stubs.c
         emu41gcc_compat/nut_globals.c
         emu41gcc_compat/nut_rom.c
@@ -115,6 +120,7 @@ target_link_libraries(soynut
         pico_stdlib
         hardware_gpio
         hardware_uart
+        hardware_flash
 )
 
 # USB (native, TinyUSB CDC) for keypress input - separate from the

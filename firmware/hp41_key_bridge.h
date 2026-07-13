@@ -6,6 +6,8 @@
 #ifndef SOYNUT_HP41_KEY_BRIDGE_H
 #define SOYNUT_HP41_KEY_BRIDGE_H
 
+#include <stdbool.h>
+
 /**
  * @brief Feed one incoming protocol byte from the USB serial keypress stream.
  *
@@ -34,7 +36,21 @@
  * hold-duration is not modeled at all" section. Two-code named keys
  * (currently just BST, a SHIFT+SST chord) have no meaningful single
  * "held" state and are ignored for "[+X]" (silently, same policy as an
- * unrecognized name).
+ * unrecognized name). ON is excluded too, for a different reason:
+ * confirmed on real hardware that holding it via "[+ON]" makes the ROM
+ * spin for 100,000+ instructions before finally toggling power on
+ * release, since ON is a power toggle rather than a USER-mode-
+ * assignable function key and was never exercised against the sustained
+ * hold mechanism the way the function keys were - see
+ * hp41_key_bridge.c's resolve_hold_code() for the full explanation.
+ * Callers should always send ON as a plain instant tap.
+ *
+ * "[CLRMEM]" is a bridge-level command, not a real HP-41 key: it doesn't
+ * push anything to keybuffer[]. It sets a one-shot flag, consumed via
+ * hp41_key_bridge_clear_memory_requested() below - deliberately not
+ * handled inside this file, which stays pure/host-testable and has no
+ * business touching flash or resetting CPU state itself (see
+ * firmware/main.c, which polls the flag and does the actual reset).
  *
  * @param c The incoming byte, as an int (e.g. from getchar_timeout_us()).
  */
@@ -45,7 +61,20 @@ void hp41_key_bridge_feed_byte(int c);
  *
  * Not needed in normal operation (the state starts idle), but useful at
  * startup for a deterministic initial state, and for test isolation.
+ * Also clears any pending "[CLRMEM]" request.
  */
 void hp41_key_bridge_reset(void);
+
+/**
+ * @brief Check for, and consume, a pending "[CLRMEM]" request.
+ *
+ * One-shot: returns true at most once per "[CLRMEM]" received - a
+ * second call immediately after returns false again, exactly like the
+ * request had never come in, until another "[CLRMEM]" arrives.
+ *
+ * @return true if "[CLRMEM]" was received since the last call to this
+ *         function (or since hp41_key_bridge_reset()).
+ */
+bool hp41_key_bridge_clear_memory_requested(void);
 
 #endif // SOYNUT_HP41_KEY_BRIDGE_H

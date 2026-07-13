@@ -159,13 +159,16 @@ static int test_second_cycle(void)
     return failures;
 }
 
-/** Edge cases: a two-code chord can't be meaningfully held, and plain
- *  "[NAME]" (no +/-) must keep working exactly as before. */
-#define EDGE_CASE_CHECK_COUNT 2
+/** Edge cases: a two-code chord can't be meaningfully held, plain
+ *  "[NAME]" (no +/-) must keep working exactly as before, and ON must
+ *  never enter the hold protocol at all (see resolve_hold_code()'s
+ *  header doc - confirmed on real hardware that holding it makes the
+ *  ROM spin for 100,000+ instructions before finally toggling power). */
+#define EDGE_CASE_CHECK_COUNT 4
 
 /**
- * @brief Verify two-code-chord hold requests are ignored, and plain
- *        "[NAME]" presses are unaffected by the hold protocol.
+ * @brief Verify two-code-chord and ON hold requests are ignored, and
+ *        plain "[NAME]" presses are unaffected by the hold protocol.
  * @return Number of failed checks (0 = all pass).
  */
 static int test_edge_cases(void)
@@ -183,6 +186,14 @@ static int test_edge_cases(void)
     failures += !check("\"[ON]\" still works unchanged (no hold semantics)",
                         lgkeybuf == 1 && (unsigned char)keybuffer[0] == 0x18
                             && !hp41_key_hold_active());
+
+    reset();
+    feed("[+ON]");
+    failures += !check("\"[+ON]\" is rejected outright (ON can't be meaningfully held)",
+                        lgkeybuf == 0 && !hp41_key_hold_active());
+    feed("[-]");
+    failures += !check("\"[-]\" after a rejected \"[+ON]\" is a safe no-op",
+                        lgkeybuf == 0 && !hp41_key_hold_active());
 
     assert(failures >= 0 && failures <= EDGE_CASE_CHECK_COUNT);
     return failures;

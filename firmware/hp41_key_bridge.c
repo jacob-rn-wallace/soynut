@@ -128,7 +128,17 @@ static void handle_named_key(const char *name)
  * like BST don't have a meaningful single "held" state, so they're
  * treated as unresolved here), or - if exactly one character - a plain
  * tabcode[] lookup, so any regular key (letters, digits, operators) can
- * be held too, not just named ones.
+ * be held too, not just named ones. ON is unconditionally rejected
+ * before either lookup: real-hardware testing showed driving it through
+ * the sustained hold protocol (continuously re-asserting flagKB/regK,
+ * the same mechanism validated against USER-mode function-key label
+ * hold/nullify - see hp41_key_hold_bridge.h) makes the ROM spin for
+ * 100,000+ instructions before it finally toggles power on release -
+ * ON is a power toggle, not a USER-mode-assignable label, and was never
+ * exercised against this mechanism the way the function keys were.
+ * "[+ON]" is now a documented no-op; callers (e.g. the keyboard GUI)
+ * should send ON as a plain instant tap instead, matching how a real
+ * power button reacts to the press itself, not how long it's held.
  *
  * @param name Uppercase key name, or a single character, NUL-terminated.
  * @return The resolved keycode, or 0 if unresolved (same "silently
@@ -138,6 +148,8 @@ static unsigned char resolve_hold_code(const char *name)
 {
     assert(name != NULL);
     assert(NUM_NAMED_KEYS > 0);
+    if (strcmp(name, "ON") == 0)
+        return 0; /* ON can't be meaningfully held - see header doc */
     for (size_t i = 0; i < NUM_NAMED_KEYS; i++) {
         if (strcmp(name, named_keys[i].name) == 0)
             return named_keys[i].code2 ? 0 : named_keys[i].code1;
@@ -162,18 +174,38 @@ static unsigned char resolve_hold_code(const char *name)
 static char name_buf[NAME_BUF_SIZE];
 static int name_len = STATE_NORMAL;
 
+/* Set by "[CLRMEM]", consumed (and cleared) by
+ * hp41_key_bridge_clear_memory_requested() - see hp41_key_bridge.h for
+ * why this is a one-shot flag rather than an immediate action here. */
+static bool clear_memory_requested = false;
+
 /**
  * @brief Reset the "[NAME]" escape-sequence state to idle.
  *
- * Power of 10, Rule 5 note: this is a single, unconditional assignment -
- * there's no precondition to check and the postcondition is exactly
- * the line above it, so an assertion here would just restate it rather
- * than catch a real anomaly (same rationale as nut_stubs.c's no-op
- * stubs).
+ * Power of 10, Rule 5 note: this is a handful of unconditional
+ * assignments with no precondition to check and no postcondition beyond
+ * exactly what the lines above already state, so an assertion here
+ * would just restate them rather than catch a real anomaly (same
+ * rationale as nut_stubs.c's no-op stubs).
  */
 void hp41_key_bridge_reset(void)
 {
     name_len = STATE_NORMAL;
+    clear_memory_requested = false;
+}
+
+/**
+ * @brief Check for, and consume, a pending "[CLRMEM]" request; see the header.
+ *
+ * @return true if "[CLRMEM]" was received since the last call.
+ */
+bool hp41_key_bridge_clear_memory_requested(void)
+{
+    bool requested = clear_memory_requested;
+    assert(requested == true || requested == false);
+    clear_memory_requested = false;
+    assert(clear_memory_requested == false);
+    return requested;
 }
 
 /**
@@ -218,6 +250,11 @@ void hp41_key_bridge_feed_byte(int c)
                 unsigned char code = resolve_hold_code(name_buf + 1);
                 if (code)
                     hp41_key_hold_press(code);
+            } else if (strcmp(name_buf, "CLRMEM") == 0) {
+                /* Bridge-level command, not a real key - see
+                 * hp41_key_bridge_clear_memory_requested()'s header doc
+                 * for why this only sets a flag rather than acting here. */
+                clear_memory_requested = true;
             } else {
                 handle_named_key(name_buf);
             }

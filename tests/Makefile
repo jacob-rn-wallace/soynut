@@ -27,7 +27,7 @@ STRICT := -Wall -Wextra -Wpedantic -Werror
 INC := -I$(ROOT)/emu41gcc -I$(ROOT)/firmware/emu41gcc_compat -I$(ROOT)/firmware -I$(ROOT)/font-tables
 NUT_STUBS_INC := -include $(ROOT)/firmware/emu41gcc_compat/nut_stubs.h
 
-TESTS := nut_smoke_test display_bridge_test key_bridge_test key_hold_test hold_trace_test
+TESTS := nut_smoke_test display_bridge_test key_bridge_test key_hold_test hold_trace_test persist_state_test
 
 .PHONY: all run clean
 all: $(addprefix $(BUILD)/,$(TESTS))
@@ -74,6 +74,9 @@ $(BUILD)/hp41_key_hold_bridge.o: $(ROOT)/firmware/hp41_key_hold_bridge.c | $(BUI
 $(BUILD)/hp41_display_bridge.o: $(ROOT)/firmware/hp41_display_bridge.c | $(BUILD)
 	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
 
+$(BUILD)/hp41_persist_state.o: $(ROOT)/firmware/hp41_persist_state.c | $(BUILD)
+	$(CC) $(STD) -fcommon $(STRICT) $(INC) -c -o $@ $<
+
 # --- Our own test files: strict warnings apply. ---
 
 $(BUILD)/%_test.o: %_test.c | $(BUILD)
@@ -105,6 +108,10 @@ $(BUILD)/hold_trace_test: $(BUILD)/hold_trace_test.o $(BUILD)/nutcpu.o $(BUILD)/
                           $(BUILD)/nut_stubs.o $(BUILD)/nut_globals.o $(BUILD)/nut_rom.o \
                           $(BUILD)/hp41_key_bridge.o $(BUILD)/hp41_key_hold_bridge.o \
                           $(BUILD)/rom_images.o
+	$(CC) -o $@ $^
+
+$(BUILD)/persist_state_test: $(BUILD)/persist_state_test.o $(BUILD)/nut_globals.o \
+                              $(BUILD)/hp41_persist_state.o
 	$(CC) -o $@ $^
 
 run: all

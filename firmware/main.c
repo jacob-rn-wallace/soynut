@@ -21,6 +21,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <string.h>
 
 #include "st7920.h"
 #include "nut_rom.h"
@@ -28,6 +29,8 @@
 #include "hp41_key_bridge.h"
 #include "hp41_key_hold_bridge.h"
 #include "hp41_arduino_bridge.h"
+#include "hp41_persist_state.h"
+#include "hp41_persist_flash.h"
 
 #define GLOBAL extern
 #include "nutcpu.h"
@@ -165,11 +168,6 @@ int main(void) {
     dbg("soynut: nut_boot()...\n");
     nut_boot();
     assert(regPC == 0); /* nut_boot()'s documented cold-start value */
-    dbg("soynut: entering main loop\n");
-
-    static uint8_t framebuf[LCD_FB_SIZE];
-    int render_count = 0;
-    uint32_t last_heartbeat_ms = to_ms_since_boot(get_absolute_time());
 
     // Real HP-41 hardware halts the CPU clock entirely after POWOFF and
     // only resumes it via a hardware keyboard-scan interrupt, which
@@ -184,11 +182,53 @@ int main(void) {
     // activity ever again.
     bool asleep = false;
 
+    // "Continuous memory": restore whatever hp41_persist_flash_save()
+    // last wrote (see the POWOFF handling below), if it's still valid.
+    // A successful restore reuses the exact same POWOFF->wake transition
+    // above rather than inventing a new boot path: it just starts
+    // "asleep", waiting for a keypress (ON) to trigger the existing
+    // flagKey=0/regPC=0 wake block below - matching real continuous-
+    // memory HP-41 power-on, which doesn't unprompted redraw/run either,
+    // it waits for you to press ON. nut_boot()'s own ROM wiring and
+    // Carry=1 coldstart default stand as-is on a failed/absent restore.
+    hp41_persist_state_t saved_state;
+    if (hp41_persist_flash_load(&saved_state)) {
+        hp41_persist_apply(&saved_state);
+        asleep = true;
+        dbg("soynut: restored continuous memory from flash\n");
+    } else {
+        dbg("soynut: no valid persisted memory - MEMORY LOST cold start\n");
+    }
+
+    dbg("soynut: entering main loop\n");
+
+    static uint8_t framebuf[LCD_FB_SIZE];
+    int render_count = 0;
+    uint32_t last_heartbeat_ms = to_ms_since_boot(get_absolute_time());
+
     while (true) {
         // Drain any pending USB serial keypresses without blocking.
         // Always runs, even while "asleep" - a key is exactly what wakes
         // it up.
         drain_usb_bytes();
+
+        // "[CLRMEM]" - the deliberate "give me MEMORY LOST back" reset
+        // (see hp41_key_bridge.h). Handled here, not inside the key
+        // bridge itself, since the key bridge is pure/host-testable and
+        // has no business touching flash or CPU state directly. Erases
+        // the persisted snapshot, then re-runs the same cold-start reset
+        // nut_boot() does at true power-on (plus an explicit espaceRAM
+        // clear, since nut_boot() itself never touches it - see
+        // nut_rom.c) and drops out of "asleep" so the ROM's own
+        // cold-start code runs immediately, exactly like a real power-on
+        // reset would, rather than waiting for a further keypress.
+        if (hp41_key_bridge_clear_memory_requested()) {
+            dbg("soynut: CLRMEM requested - erasing persisted memory\n");
+            hp41_persist_flash_erase();
+            nut_boot();
+            memset(espaceRAM, 0, sizeof(espaceRAM));
+            asleep = false;
+        }
 
         // TEMPORARY: once/second liveness check, independent of display
         // activity - proves whether the CPU loop is genuinely still
@@ -326,8 +366,19 @@ int main(void) {
 
         if (ret == 1) {
             // POWOFF - see the big comment above. Stop running until a
-            // new key arrives.
+            // new key arrives. This is also the "continuous memory"
+            // save point: the real HP-41's auto-power-off already fires
+            // after essentially every keypress (see CLAUDE.md), so
+            // saving here gives near-continuous persistence with only a
+            // small, honestly-documented gap (a literal power yank
+            // between keypresses, before the next auto-POWOFF, loses
+            // that in-flight session). hp41_persist_flash_save() skips
+            // the actual flash write entirely when nothing changed, so
+            // this costs nothing extra on an idle/no-op POWOFF.
             dbg("soynut: POWOFF (Carry=%d) - sleeping until next key\n", Carry);
+            hp41_persist_state_t snap;
+            hp41_persist_capture(&snap);
+            hp41_persist_flash_save(&snap);
             asleep = true;
         }
 

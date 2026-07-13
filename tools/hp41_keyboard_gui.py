@@ -143,6 +143,20 @@ class PressMode:
 # deliberate hold still reaches the real hold protocol quickly.
 HOLD_ENGAGE_MS = 150
 
+# Keys that must always be sent as a plain instant tap, regardless of the
+# active PressMode - see _on_press()'s use of this set for why. Currently
+# just ON: confirmed on real hardware that driving it through the hold
+# protocol (as THRESHOLD would for any key held past HOLD_ENGAGE_MS, or
+# HOLD_ONLY immediately) makes the ROM spin for 100,000+ instructions
+# before it finally toggles power on release - a very noticeable stall,
+# not a snappy toggle - because ON is a power button, not a USER-mode-
+# assignable function key, and firmware/hp41_key_bridge.c's
+# resolve_hold_code() now rejects "[+ON]" outright to match. Sending it
+# as a tap here avoids ever hitting that rejected path in the first
+# place, so a click - however long it's physically held on screen -
+# reacts immediately, the same way a real ON button would.
+ALWAYS_TAP_KEYS: frozenset[bytes] = frozenset({b"[ON]"})
+
 # Displayed at this fraction of the source image's native resolution
 # (1165x1972) - keeps the window a reasonable size on a laptop screen.
 # Click coordinates are scaled by the same factor at hit-test time.
@@ -466,6 +480,14 @@ class KeyboardApp:
         self._hold_engaged = False
         self._hold_timer = None
 
+        if key in ALWAYS_TAP_KEYS:
+            # See ALWAYS_TAP_KEYS's comment - this key must never enter
+            # the hold protocol, regardless of mode. _on_release() below
+            # checks the same set and returns immediately for it, since
+            # the tap has already been sent here.
+            self._send_tap(label, key)
+            return
+
         if mode == PressMode.TAP_ONLY:
             # Original, pre-hold-feature behavior: send the instant tap
             # right away, full stop - there's nothing left to do on
@@ -515,7 +537,7 @@ class KeyboardApp:
         """
         self.canvas.itemconfig(rect_id, outline="")
 
-        if self._active_mode == PressMode.TAP_ONLY:
+        if key in ALWAYS_TAP_KEYS or self._active_mode == PressMode.TAP_ONLY:
             # _on_press() already sent the full tap - nothing to do.
             return
 
