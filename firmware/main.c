@@ -89,6 +89,21 @@ static void dbg(const char *fmt, ...) {
  *  drain always finishes in well under this many iterations. */
 #define MAX_BYTES_PER_DRAIN 256
 
+/** How long the system must sit idle (asleep, no new key queued) before a
+ *  pending continuous-memory snapshot actually gets written to flash - see
+ *  the "deferred/debounced" note above hp41_persist_capture()'s call site
+ *  below for why this exists: flash_range_erase()/flash_range_program()
+ *  block the entire CPU (interrupts disabled, XIP execution halted) for
+ *  on the order of 100ms+ per call, and captured state includes fields
+ *  (Carry, regK) that change on nearly every keystroke - so writing
+ *  synchronously on every POWOFF (the original design) stalled the very
+ *  next USB byte drain behind that write on almost every single keypress,
+ *  confirmed on real hardware as a serious responsiveness regression.
+ *  Debouncing trades a slightly larger (but still small and honestly-
+ *  documented - see CLAUDE.md) exposure window for eliminating that
+ *  per-keystroke stall entirely during normal interactive use. */
+#define PERSIST_SAVE_DELAY_MS 1500u
+
 /**
  * @brief Drain any pending USB serial bytes into the key bridge, without blocking.
  *
@@ -138,8 +153,10 @@ static void drain_usb_bytes(void) {
  * (single-stepping instead, sustaining the key-hold state, if a hold
  * is active); throttles via sleep_us() to TARGET_INSTRUCTIONS_PER_SEC;
  * on fdsp, computes/checksums/pushes a new framebuffer to the LCD; on
- * POWOFF, goes to sleep; on an invalid opcode, halts. See CLAUDE.md's
- * "main.c" section for the full walkthrough.
+ * POWOFF, captures continuous-memory state and goes to sleep (the actual
+ * flash write is deferred until idle - see PERSIST_SAVE_DELAY_MS); on an
+ * invalid opcode, halts. See CLAUDE.md's "main.c" section for the full
+ * walkthrough.
  *
  * @return Never returns - this is bare-metal firmware with no OS to
  *         return control to.
@@ -181,6 +198,17 @@ int main(void) {
     // instruction count climbing at ~1.4M/s, no further key or display
     // activity ever again.
     bool asleep = false;
+
+    // Deferred/debounced continuous-memory save state - see
+    // PERSIST_SAVE_DELAY_MS's comment above. persist_dirty is set (and
+    // pending_snapshot captured) at POWOFF time, but the actual flash
+    // write is deferred until the system has sat idle (asleep, no new
+    // key queued) for PERSIST_SAVE_DELAY_MS - see the "asleep" branch
+    // below. pending_snapshot is a ~8.5KB struct - static, not a main()
+    // stack local, same reasoning as framebuf[] below.
+    static hp41_persist_state_t pending_snapshot;
+    bool persist_dirty = false;
+    uint32_t persist_idle_since_ms = 0;
 
     // "Continuous memory": restore whatever hp41_persist_flash_save()
     // last wrote (see the POWOFF handling below), if it's still valid.
@@ -228,6 +256,10 @@ int main(void) {
             nut_boot();
             memset(espaceRAM, 0, sizeof(espaceRAM));
             asleep = false;
+            // Discard any not-yet-flushed deferred save - otherwise the
+            // idle-debounce timer below would happily write a stale
+            // pre-CLRMEM snapshot right back over the erase just done.
+            persist_dirty = false;
         }
 
         // TEMPORARY: once/second liveness check, independent of display
@@ -256,6 +288,18 @@ int main(void) {
                 regPC = 0;
                 asleep = false;
             } else {
+                // Genuinely idle (still asleep, no key queued yet this
+                // iteration) - the moment to flush a deferred continuous-
+                // memory save, if one's pending and it's been at least
+                // PERSIST_SAVE_DELAY_MS since it was captured. Doing it
+                // here rather than immediately at POWOFF is what keeps
+                // rapid keypresses free of the flash write's blocking
+                // stall - see PERSIST_SAVE_DELAY_MS's comment above.
+                if (persist_dirty && (now_ms - persist_idle_since_ms) >= PERSIST_SAVE_DELAY_MS) {
+                    dbg("soynut: idle - flushing deferred continuous-memory save\n");
+                    hp41_persist_flash_save(&pending_snapshot);
+                    persist_dirty = false;
+                }
                 continue; // keep waiting - do not call executeNUT() while asleep
             }
         }
@@ -367,14 +411,19 @@ int main(void) {
         if (ret == 1) {
             // POWOFF - see the big comment above. Stop running until a
             // new key arrives. This is also the "continuous memory"
-            // save point: the real HP-41's auto-power-off already fires
-            // after essentially every keypress (see CLAUDE.md), so
-            // saving here gives near-continuous persistence with only a
-            // small, honestly-documented gap (a literal power yank
-            // between keypresses, before the next auto-POWOFF, loses
-            // that in-flight session). hp41_persist_flash_save() skips
-            // the actual flash write entirely when nothing changed, so
-            // this costs nothing extra on an idle/no-op POWOFF.
+            // capture point, but NOT the save point - the real HP-41's
+            // auto-power-off fires after essentially every keypress (see
+            // CLAUDE.md), and hp41_persist_flash_save()'s blocking
+            // flash_range_erase()/flash_range_program() call is too slow
+            // (100ms+, interrupts disabled the whole time) to run
+            // synchronously here on every single one without visibly
+            // stalling the very next keypress - confirmed as a real
+            // responsiveness regression on hardware. So only the pure,
+            // fast hp41_persist_capture() runs here; the actual flash
+            // write is deferred until the system sits idle for
+            // PERSIST_SAVE_DELAY_MS - see that constant's comment and the
+            // "asleep" branch above, where the deferred write actually
+            // happens.
             dbg("soynut: POWOFF (Carry=%d) - sleeping until next key\n", Carry);
 
             // POWOFF fires after essentially every keystroke (see the big
@@ -396,9 +445,9 @@ int main(void) {
                 dbg("soynut: LCD cleared for power-off (dspon=0)\n");
             }
 
-            hp41_persist_state_t snap;
-            hp41_persist_capture(&snap);
-            hp41_persist_flash_save(&snap);
+            hp41_persist_capture(&pending_snapshot);
+            persist_dirty = true;
+            persist_idle_since_ms = now_ms;
             asleep = true;
         }
 

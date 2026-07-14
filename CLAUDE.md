@@ -696,9 +696,8 @@ Split into the same pure-logic/hardware pattern as the display bridge
   reads directly from the XIP-mapped flash address (no SDK call needed
   for reads) and validates it. `hp41_persist_flash_save()` first
   compares against what's already on flash and skips the erase/program
-  cycle entirely if nothing changed — the flash-wear guard that makes
-  calling it on every `POWOFF` safe long-term. `hp41_persist_flash_erase()`
-  wipes the region outright.
+  cycle entirely if nothing changed. `hp41_persist_flash_erase()` wipes
+  the region outright.
 
 **Wiring in `firmware/main.c`:** deliberately reuses the exact same,
 already-hardware-validated `POWOFF`→wake transition the emulator already
@@ -710,15 +709,47 @@ snapshot if one exists and set `asleep = true` — the existing
 over on the very next keypress exactly as it already does for a same-
 session `POWOFF`→wake, with zero duplicated reset logic. This also
 matches real continuous-memory HP-41 power-on semantics: it doesn't
-unprompted redraw/run, it waits for you to press ON. At `POWOFF`,
-`hp41_persist_capture()` + `hp41_persist_flash_save()` save the current
-state right before going to sleep. Since auto-power-off already fires
-after essentially every keypress (see "Known unknowns" below), this
-gives near-continuous persistence with only a small, honestly-documented
-gap: a literal power yank *between* keypresses, before the next
-auto-`POWOFF` fires, loses that in-flight session. No separate
-timer-based save exists — the change-detection guard above plus that
-already-tiny window make one unnecessary.
+unprompted redraw/run, it waits for you to press ON.
+
+**The save itself is deferred/debounced, not synchronous with
+`POWOFF`.** An earlier version called `hp41_persist_capture()` +
+`hp41_persist_flash_save()` directly inside the `POWOFF` handling, on
+the reasoning that since `POWOFF` already fires after essentially every
+keypress, saving there would give near-continuous persistence "for
+free." **Confirmed as a real hardware regression, not theoretical:**
+`hp41_persist_state_t` includes `Carry` and `regK`, both of which change
+on almost every keystroke, so the change-detection guard in
+`hp41_persist_flash_save()` almost never actually skipped the write —
+meaning nearly every keypress triggered a real
+`flash_range_erase()`+`flash_range_program()` cycle (12 KiB, interrupts
+disabled, ~100ms+) *before* the main loop could get back around to
+draining the next USB byte. The result was exactly what got reported:
+noticeably higher latency between a keypress and the system responding,
+where before this feature existed the round trip had been essentially
+instant. Fixed by decoupling capture from save: `POWOFF` still calls the
+cheap, pure `hp41_persist_capture()` immediately (into a `main()`-local
+static `pending_snapshot`) and sets a `persist_dirty` flag, but the
+actual `hp41_persist_flash_save()` call is deferred to the main loop's
+`asleep`-and-idle branch, firing at most once, only after the system has
+sat idle (asleep, no new key queued) for `PERSIST_SAVE_DELAY_MS` (1.5s)
+with no further keypress resetting that timer. Since a real typing
+cadence keeps re-triggering `POWOFF` (and thus resetting the idle timer)
+faster than 1.5s apart, the blocking flash write never happens while
+actively interacting with the calculator — only once activity actually
+stops. This does widen the "honestly-documented gap" from "between
+keypresses" to "up to ~1.5s after the last keypress" — a literal power
+yank inside that window loses the in-flight session — but is a
+deliberate, worthwhile trade for restoring normal interactive
+responsiveness. `[CLRMEM]`'s handling also clears any pending
+`persist_dirty` flag, so a stale pre-erase snapshot can never get
+written back over a fresh erase by the deferred flush firing late.
+**Verified on real hardware:** with the fix in place, serial-log
+timestamps of incoming keypress bytes track the sender's actual send
+cadence with no added delay, and exactly one
+`"idle - flushing deferred continuous-memory save"` line appears,
+~1.5s after the last keypress in a burst — confirming both that the
+per-keystroke stall is gone and that the deferred write still happens
+reliably once idle.
 
 **`[CLRMEM]`** (`firmware/hp41_key_bridge.c`, a bridge-level command, not
 a real HP-41 key — deliberately handled in `main.c`, not inside the key
