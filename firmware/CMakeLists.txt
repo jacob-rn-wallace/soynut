@@ -33,6 +33,7 @@ add_executable(soynut
         st7920.c
         bitmaps.c
         hp41_display_bridge.c
+        hp41_elite_display_bridge.c
         hp41_key_bridge.c
         hp41_key_hold_bridge.c
         hp41_arduino_bridge.c
@@ -45,6 +46,7 @@ add_executable(soynut
         emu41gcc_compat/nut_rom.c
         ${ROMS_DIR}/rom_images.c
         ${FONT_TABLES_DIR}/hp41_display_tables.c
+        ${FONT_TABLES_DIR}/hp41_elite_font_table.c
 )
 
 target_include_directories(soynut PRIVATE
@@ -64,6 +66,7 @@ set_source_files_properties(
         ${EMU41GCC_DIR}/display.c
         emu41gcc_compat/nut_globals.c
         emu41gcc_compat/nut_rom.c
+        hp41_elite_display_bridge.c
         hp41_key_bridge.c
         hp41_key_hold_bridge.c
         hp41_persist_state.c
@@ -103,6 +106,7 @@ set(SOYNUT_OWN_SOURCES
         st7920.c
         bitmaps.c
         hp41_display_bridge.c
+        hp41_elite_display_bridge.c
         hp41_key_bridge.c
         hp41_key_hold_bridge.c
         hp41_arduino_bridge.c

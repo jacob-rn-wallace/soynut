@@ -26,6 +26,7 @@
 #include "st7920.h"
 #include "nut_rom.h"
 #include "hp41_display_bridge.h"
+#include "hp41_elite_display_bridge.h"
 #include "hp41_key_bridge.h"
 #include "hp41_key_hold_bridge.h"
 #include "hp41_arduino_bridge.h"
@@ -199,6 +200,16 @@ int main(void) {
     // activity ever again.
     bool asleep = false;
 
+    // Elite User Mode - see CLAUDE.md's "Elite User Mode" section.
+    // Deliberately plain main()-local bools, not part of
+    // hp41_persist_state_t: this is ephemeral display/UI state, not
+    // real HP-41 calculator memory, so it always starts false on every
+    // boot (cold start or a continuous-memory restore alike) rather
+    // than surviving a reset - a main()-local can't do anything else,
+    // which is exactly the point.
+    bool elite_mode_active = false;
+    bool alpha_row_active = false;
+
     // Deferred/debounced continuous-memory save state - see
     // PERSIST_SAVE_DELAY_MS's comment above. persist_dirty is set (and
     // pending_snapshot captured) at POWOFF time, but the actual flash
@@ -262,6 +273,30 @@ int main(void) {
             persist_dirty = false;
         }
 
+        // Elite User Mode toggle (real XEQ-ALPHA-LEET-ALPHA key sequence,
+        // or "[LEET]") and its alpha-row sub-toggle (bare ALPHA while
+        // active) - see hp41_key_bridge.h and CLAUDE.md's "Elite User
+        // Mode" section. redraw_needed forces an immediate re-render
+        // below rather than waiting for the next fdsp, since flipping
+        // either of these doesn't itself touch the ROM's own display
+        // registers.
+        bool redraw_needed = false;
+        if (hp41_key_bridge_elite_mode_toggle_requested()) {
+            elite_mode_active = !elite_mode_active;
+            // Always resume showing X (not a lingering alpha row) the
+            // next time Elite Mode is entered - a deliberate, simple
+            // default rather than remembering the sub-view across toggles.
+            alpha_row_active = false;
+            hp41_key_bridge_set_elite_mode_active(elite_mode_active);
+            redraw_needed = true;
+            dbg("soynut: Elite Mode %s\n", elite_mode_active ? "ON" : "OFF");
+        }
+        if (hp41_key_bridge_alpha_row_toggle_requested()) {
+            alpha_row_active = !alpha_row_active;
+            redraw_needed = true;
+            dbg("soynut: Elite Mode alpha row %s\n", alpha_row_active ? "ON" : "OFF");
+        }
+
         // TEMPORARY: once/second liveness check, independent of display
         // activity - proves whether the CPU loop is genuinely still
         // running (PC/instr advancing) vs actually stuck, and shows the
@@ -287,8 +322,9 @@ int main(void) {
                              // state machine to treat this as a fresh press
                 regPC = 0;
                 asleep = false;
-            } else {
-                // Genuinely idle (still asleep, no key queued yet this
+            } else if (!redraw_needed) {
+                // Genuinely idle (still asleep, no key queued, and no
+                // Elite Mode toggle needs an immediate redraw this
                 // iteration) - the moment to flush a deferred continuous-
                 // memory save, if one's pending and it's been at least
                 // PERSIST_SAVE_DELAY_MS since it was captured. Doing it
@@ -302,6 +338,13 @@ int main(void) {
                 }
                 continue; // keep waiting - do not call executeNUT() while asleep
             }
+            // else: still asleep (no key queued), but an Elite Mode
+            // toggle landed this iteration and needs to reach the render
+            // block below right away - see redraw_needed's comment
+            // above. Falls through with asleep still true, so the
+            // executeNUT()-running block right below is skipped (guarded
+            // on !asleep), matching the CPU genuinely staying halted;
+            // only the render block runs.
         }
 
         // While a real key hold is in progress, single-step executeNUT()
@@ -346,15 +389,21 @@ int main(void) {
         // and POWOFF/invalid-opcode handling are unaffected).
         int cptinstr_before = cptinstr;
         int ret = 0;
-        if (hp41_key_hold_active()) {
-            for (int i = 0; i < 1000 && hp41_key_hold_active(); i++) {
-                hp41_key_hold_sustain();
-                ret = executeNUT(1);
-                drain_usb_bytes();
-                if (ret != 0 || fdsp) break;
+        if (!asleep) {
+            // Still genuinely asleep here only happens via the
+            // redraw_needed fall-through above - the CPU must stay
+            // halted, so executeNUT() is skipped entirely; ret stays 0
+            // and the render block below still runs on redraw_needed.
+            if (hp41_key_hold_active()) {
+                for (int i = 0; i < 1000 && hp41_key_hold_active(); i++) {
+                    hp41_key_hold_sustain();
+                    ret = executeNUT(1);
+                    drain_usb_bytes();
+                    if (ret != 0 || fdsp) break;
+                }
+            } else {
+                ret = executeNUT(1000);
             }
-        } else {
-            ret = executeNUT(1000);
         }
         assert(ret >= 0 && ret <= 3); /* executeNUT()'s only documented return values */
 
@@ -373,10 +422,17 @@ int main(void) {
         // nutcpu.c's executeNUT() and storeData()'s facces_dsp
         // countdown - so this stays responsive without any extra timing
         // logic here.
-        if (fdsp) {
+        if (fdsp || redraw_needed) {
             render_count++;
 
-            hp41_display_compute_framebuffer(framebuf);
+            if (elite_mode_active) {
+                if (alpha_row_active)
+                    hp41_elite_display_compute_framebuffer_alpha(framebuf);
+                else
+                    hp41_elite_display_compute_framebuffer(framebuf);
+            } else {
+                hp41_display_compute_framebuffer(framebuf);
+            }
 
             // TEMPORARY: ground-truth verification - dumps exactly what the
             // ROM computed for display, plus an XOR checksum, to compare

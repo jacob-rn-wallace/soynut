@@ -27,7 +27,7 @@ STRICT := -Wall -Wextra -Wpedantic -Werror
 INC := -I$(ROOT)/emu41gcc -I$(ROOT)/firmware/emu41gcc_compat -I$(ROOT)/firmware -I$(ROOT)/font-tables
 NUT_STUBS_INC := -include $(ROOT)/firmware/emu41gcc_compat/nut_stubs.h
 
-TESTS := nut_smoke_test display_bridge_test key_bridge_test key_hold_test hold_trace_test persist_state_test
+TESTS := nut_smoke_test display_bridge_test key_bridge_test key_hold_test hold_trace_test persist_state_test elite_display_bridge_test
 
 .PHONY: all run clean
 all: $(addprefix $(BUILD)/,$(TESTS))
@@ -49,6 +49,9 @@ $(BUILD)/rom_images.o: $(ROOT)/roms/rom_images.c | $(BUILD)
 	$(CC) $(STD) $(INC) -c -o $@ $<
 
 $(BUILD)/hp41_display_tables.o: $(ROOT)/font-tables/hp41_display_tables.c | $(BUILD)
+	$(CC) $(STD) $(INC) -c -o $@ $<
+
+$(BUILD)/hp41_elite_font_table.o: $(ROOT)/font-tables/hp41_elite_font_table.c | $(BUILD)
 	$(CC) $(STD) $(INC) -c -o $@ $<
 
 # --- Our own compat shims and bridge files: strict warnings apply.
@@ -75,6 +78,9 @@ $(BUILD)/hp41_display_bridge.o: $(ROOT)/firmware/hp41_display_bridge.c | $(BUILD
 	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
 
 $(BUILD)/hp41_persist_state.o: $(ROOT)/firmware/hp41_persist_state.c | $(BUILD)
+	$(CC) $(STD) -fcommon $(STRICT) $(INC) -c -o $@ $<
+
+$(BUILD)/hp41_elite_display_bridge.o: $(ROOT)/firmware/hp41_elite_display_bridge.c | $(BUILD)
 	$(CC) $(STD) -fcommon $(STRICT) $(INC) -c -o $@ $<
 
 # --- Our own test files: strict warnings apply. ---
@@ -112,6 +118,18 @@ $(BUILD)/hold_trace_test: $(BUILD)/hold_trace_test.o $(BUILD)/nutcpu.o $(BUILD)/
 
 $(BUILD)/persist_state_test: $(BUILD)/persist_state_test.o $(BUILD)/nut_globals.o \
                               $(BUILD)/hp41_persist_state.o
+	$(CC) -o $@ $^
+
+# Deliberately lighter than display_bridge_test's link set: this test
+# pokes espaceRAM/lcd_ann directly rather than booting the ROM (see
+# elite_display_bridge_test.c), so it needs nut_globals.o (espaceRAM's
+# real storage) and display.o (lcd_ann's real storage - a plain global
+# in emu41gcc/display.c, see hp41_elite_display_bridge.c's own extern
+# declaration of it) but not nutcpu.o/nut_stubs.o/nut_rom.o/rom_images.o,
+# since nothing here ever calls executeNUT() or boots the ROM.
+$(BUILD)/elite_display_bridge_test: $(BUILD)/elite_display_bridge_test.o $(BUILD)/nut_globals.o $(BUILD)/display.o \
+                                     $(BUILD)/hp41_elite_display_bridge.o \
+                                     $(BUILD)/hp41_display_tables.o $(BUILD)/hp41_elite_font_table.o
 	$(CC) -o $@ $^
 
 run: all

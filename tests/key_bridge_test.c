@@ -224,8 +224,157 @@ static int test_multi_key_and_cap(void)
     return failures;
 }
 
+/**
+ * @brief Compare a boolean accessor's result against an expected value.
+ *
+ * Same reporting style as check() above, for the one-shot toggle
+ * accessors (hp41_key_bridge_elite_mode_toggle_requested() and
+ * hp41_key_bridge_alpha_row_toggle_requested()), which don't produce a
+ * keybuffer[] result to compare.
+ *
+ * @param label Human-readable name for this check.
+ * @param got   Actual value.
+ * @param want  Expected value.
+ * @return 1 on match, 0 on mismatch.
+ */
+static int check_bool(const char *label, bool got, bool want)
+{
+    assert(label != NULL);
+    int ok = (got == want);
+    printf("%-28s got=%d want=%d  %s\n", label, got, want, ok ? "OK" : "MISMATCH");
+    return ok;
+}
+
+/** Elite User Mode's default-disabled production behavior, its
+ *  XEQ-ALPHA-LEET-ALPHA trigger sequence (once explicitly enabled), its
+ *  case-insensitivity, near-miss/broken-sequence non-interference with
+ *  real key sequences, the "[LEET]" alias, the bare-ALPHA alpha-row
+ *  sub-toggle, and the "[NAME]" bracket-escape form regression (the
+ *  real bug the on-screen keyboard GUI hit on real hardware). */
+#define ELITE_MODE_CHECK_COUNT 23
+
+/**
+ * @brief Verify the Elite User Mode trigger sequence and alpha-row sub-toggle.
+ * @return Number of failed checks (0 = all pass).
+ */
+static int test_elite_mode_trigger(void)
+{
+    int failures = 0;
+    assert(failures == 0);
+
+    /* Production default: the feature is currently disabled (real
+     * display bugs found on hardware, see CLAUDE.md's "Elite User Mode"
+     * section) - confirm the full trigger sequence is a complete no-op,
+     * pushing every keycode (including the would-be-swallowed closing
+     * ALPHA) exactly like any other unrelated sequence, before enabling
+     * it for the rest of this test to keep exercising the underlying
+     * logic. */
+    reset();
+    feed_string("\x18\x01LEET\x01");
+    failures += !check("feature disabled by default: keybuffer unaffected",
+                        (unsigned char[]){0x32, 0xc4, 0x72, 0xc0, 0xc0, 0x84, 0xc4}, 7);
+    failures += !check_bool("  toggle_requested() while disabled",
+                             hp41_key_bridge_elite_mode_toggle_requested(), false);
+
+    hp41_key_bridge_set_elite_mode_feature_enabled(true);
+
+    /* Full sequence: XEQ, ALPHA, L, E, E, T, ALPHA - the closing ALPHA
+     * is swallowed (not pushed), and the toggle flag fires exactly once. */
+    reset();
+    feed_string("\x18\x01LEET\x01");
+    failures += !check("XEQ ALPHA LEET ALPHA -> keybuffer",
+                        (unsigned char[]){0x32, 0xc4, 0x72, 0xc0, 0xc0, 0x84}, 6);
+    failures += !check_bool("  toggle_requested() first call",
+                             hp41_key_bridge_elite_mode_toggle_requested(), true);
+    failures += !check_bool("  toggle_requested() second call (one-shot)",
+                             hp41_key_bridge_elite_mode_toggle_requested(), false);
+
+    /* Near-miss: a real, different program name ("LEER" not "LEET") -
+     * every byte, including the closing ALPHA, must reach keybuffer[]
+     * exactly as if this trigger didn't exist at all. */
+    reset();
+    feed_string("\x18\x01LEER\x01");
+    failures += !check("XEQ ALPHA LEER ALPHA -> unaffected",
+                        (unsigned char[]){0x32, 0xc4, 0x72, 0xc0, 0xc0, 0x34, 0xc4}, 7);
+    failures += !check_bool("  toggle_requested() after near-miss",
+                             hp41_key_bridge_elite_mode_toggle_requested(), false);
+
+    /* Case-insensitive on the letters. */
+    reset();
+    feed_string("\x18\x01leet\x01");
+    failures += !check_bool("lowercase 'leet' triggers",
+                             hp41_key_bridge_elite_mode_toggle_requested(), true);
+
+    /* Broken mid-sequence by an unrelated byte - resets shadow tracking;
+     * every byte still reaches keybuffer[] normally, no trigger. */
+    reset();
+    feed_string("\x18\x01L5\x01");
+    failures += !check("XEQ ALPHA L '5' ALPHA -> unaffected",
+                        (unsigned char[]){0x32, 0xc4, 0x72, 0x75, 0xc4}, 5);
+    failures += !check_bool("  toggle_requested() after broken sequence",
+                             hp41_key_bridge_elite_mode_toggle_requested(), false);
+
+    /* Re-triggerable: two full sequences in a row. */
+    reset();
+    feed_string("\x18\x01LEET\x01");
+    failures += !check_bool("first of two toggles",
+                             hp41_key_bridge_elite_mode_toggle_requested(), true);
+    feed_string("\x18\x01LEET\x01");
+    failures += !check_bool("second of two toggles",
+                             hp41_key_bridge_elite_mode_toggle_requested(), true);
+
+    /* "[LEET]" bracket-escape alias - nothing pushed to keybuffer[]. */
+    reset();
+    feed_string("[LEET]");
+    failures += !check("[LEET] alias -> nothing pushed", NULL, 0);
+    failures += !check_bool("  toggle_requested() after [LEET]",
+                             hp41_key_bridge_elite_mode_toggle_requested(), true);
+
+    /* Bare ALPHA while Elite Mode is active is intercepted (swallowed,
+     * sets the alpha-row toggle) instead of reaching keybuffer[]; while
+     * inactive, it's a completely normal keypress. */
+    reset();
+    hp41_key_bridge_set_elite_mode_active(true);
+    hp41_key_bridge_feed_byte(0x01);
+    failures += !check("bare ALPHA while active -> nothing pushed", NULL, 0);
+    failures += !check_bool("  alpha_row_toggle_requested() after bare ALPHA",
+                             hp41_key_bridge_alpha_row_toggle_requested(), true);
+    hp41_key_bridge_set_elite_mode_active(false);
+    reset(); /* also exercises hp41_key_bridge_reset() clearing elite_mode_active_internal */
+    hp41_key_bridge_feed_byte(0x01);
+    failures += !check("bare ALPHA while inactive -> normal ALPHA keypress",
+                        (unsigned char[]){0xc4}, 1);
+
+    /* Regression test for a real bug found on real hardware: the
+     * on-screen keyboard GUI (tools/hp41_keyboard_gui.py) sends XEQ and
+     * ALPHA as "[NAME]" bracket escapes, never the raw ctrl-X/ctrl-A
+     * bytes - an earlier, byte-level-only version of this trigger never
+     * saw them, so it silently never fired via the GUI at all. Must
+     * work identically to the raw-byte form above. */
+    reset();
+    feed_string("[XEQ][ALPHA]LEET[ALPHA]");
+    failures += !check("[XEQ][ALPHA]LEET[ALPHA] -> keybuffer",
+                        (unsigned char[]){0x32, 0xc4, 0x72, 0xc0, 0xc0, 0x84}, 6);
+    failures += !check_bool("  toggle_requested() after bracket-escape form",
+                             hp41_key_bridge_elite_mode_toggle_requested(), true);
+
+    /* Same regression, for the bare-ALPHA alpha-row sub-toggle: the
+     * GUI's ALPHA button always sends "[ALPHA]", so this must also be
+     * intercepted while Elite Mode is active, not just a raw 0x01 byte. */
+    reset();
+    hp41_key_bridge_set_elite_mode_active(true);
+    feed_string("[ALPHA]");
+    failures += !check("[ALPHA] while active -> nothing pushed", NULL, 0);
+    failures += !check_bool("  alpha_row_toggle_requested() after [ALPHA]",
+                             hp41_key_bridge_alpha_row_toggle_requested(), true);
+
+    assert(failures >= 0 && failures <= ELITE_MODE_CHECK_COUNT);
+    return failures;
+}
+
 #define TOTAL_CHECK_COUNT (DIRECT_ASCII_CHECK_COUNT + NAMED_KEY_CHECK_COUNT \
-                           + MALFORMED_CHECK_COUNT + MULTI_KEY_CHECK_COUNT)
+                           + MALFORMED_CHECK_COUNT + MULTI_KEY_CHECK_COUNT \
+                           + ELITE_MODE_CHECK_COUNT)
 
 /**
  * @brief Run all key bridge check groups and report pass/fail.
@@ -236,7 +385,8 @@ int main(void)
     const int failures = test_direct_ascii_keys()
                         + test_named_key_protocol()
                         + test_malformed_sequences()
-                        + test_multi_key_and_cap();
+                        + test_multi_key_and_cap()
+                        + test_elite_mode_trigger();
     assert(failures >= 0);
     assert(failures <= TOTAL_CHECK_COUNT);
 

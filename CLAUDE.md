@@ -776,6 +776,208 @@ state) — see "Known unknowns" for the full results and one caveat found
 along the way (reflashing the firmware, as opposed to a plain reset or
 power cycle, currently wipes the persisted region).
 
+## Elite User Mode — `firmware/hp41_elite_display_bridge.h`/`.c` (currently deactivated)
+
+**Status: built, reached real hardware, found real bugs there
+(the ALPHA annunciator getting stuck lit with no way to clear it, and
+the elite grid always showing all zeros no matter what was actually on
+the stack), and deactivated rather than debugged further for now** —
+the user's own call, not a decision to reopen without being asked. Kept
+fully intact, not deleted, matching this project's established pattern
+for dormant features (see "Arduino display bridge" and "Direct
+Pico→LCD serial link" below for the same treatment elsewhere in this
+codebase). Deactivated at a single, well-contained point:
+`firmware/hp41_key_bridge.c`'s `elite_mode_feature_enabled` static
+defaults to `false`, checked first thing inside `push_key_tracked()` —
+while it's off, every keycode passes through completely unmodified and
+the trigger sequence is never even looked at, so the feature is a true
+no-op in production, not just visually hidden. `tests/key_bridge_test.c`
+calls `hp41_key_bridge_set_elite_mode_feature_enabled(true)` so the
+underlying trigger logic itself keeps being exercised and verified even
+while production stays off — re-enabling for real hardware use is a
+one-line flip of that static's initializer once the display bugs are
+actually diagnosed, not a rewrite. **Nothing about the two known bugs
+has been investigated yet** — they're recorded here exactly as
+reported, not analyzed, since debugging was explicitly deferred.
+
+An Easter egg, not a real HP-41 feature: typing the real key sequence
+`XEQ`, `ALPHA`, `L`, `E`, `E`, `T`, `ALPHA` — exactly how you'd invoke a
+real global-label program — toggles the display from its normal single
+line of 12 characters into 4 lines of 24 tiny (3×5 pixel) characters,
+showing the T/Z/Y/X stack registers top-to-bottom, each as a fully
+formatted signed decimal number with exponent. Typing the same sequence
+again returns to the normal view. While active, pressing `ALPHA` alone
+swaps the bottom row (normally X) for the most recently typed
+ALPHA-mode text instead; pressing it again swaps back. Elite Mode's
+on/off state is ephemeral — a plain `main()`-local, not part of
+`hp41_persist_state_t` — so it always resets to the normal view on any
+firmware reset or power-cycle, never persisted.
+
+**Register access — confirmed empirically, not from documentation.**
+`emu41gcc` has no C-level concept of "the stack" or "the ALPHA
+register" at all — it's a raw Nut CPU microcode emulator; all HP-41
+semantics above the bare instruction set are ROM code manipulating
+generic RAM registers via `storeData()`/`recallData()`. Two facts this
+project needed were dug out by reading `nutcpu.c` directly and, for the
+second, by building a throwaway diagnostic (same technique as
+`tools/powoff_trace.c`) that boots the real ROM, drives real key
+sequences through it, and diffs `espaceRAM` before/after each keystroke:
+
+- **T/Z/Y/X** live at fixed `espaceRAM` register indices 0/1/2/3 (`M`
+  onwards are OS scratch registers, confirmed via `monit.c`'s debug
+  register-naming string `"TZYXLMNOPQ-abcde"` — a naming coincidence
+  with `nutcpu.h`'s unrelated `regM`/`regN` CPU scratch registers, not a
+  connection). Each register is 8 bytes: byte 0 is a write-protect flag
+  (always 0 in practice for the stack), bytes 1-7 pack the same 14-nibble
+  BCD format the CPU already uses for arithmetic (confirmed from
+  `recallData()`'s unpack loop and `exec2()`'s field-selector table):
+  nibble 0 = exponent sign (0=positive/9=negative), nibbles 1-2 =
+  exponent digits (nibble 1 = units, nibble 2 = tens), nibbles 3-12 =
+  10 mantissa digits (nibble 3 = least significant/last-typed digit,
+  nibble 12 = most significant/leading digit), nibble 13 = mantissa
+  sign. No formatter for this exists anywhere in `emu41gcc` — the
+  decode in `hp41_elite_decode_register()` is new code.
+- **ALPHA-mode text entry** has no dedicated register either. Empirical
+  finding: `espaceRAM` register 5 reliably holds the most-recently-typed
+  ~7 characters as plain 8-bit ASCII (not the sparse 10-bit LCD code —
+  confirmed directly, e.g. typing `'A'` writes literal byte `0x41`),
+  most-recent-character-first, shifting by one byte per keystroke.
+  **Deliberately not chased further**: past ~24 typed characters, the
+  registers that initially held characters 8-24 (6, 7, 8) stop updating
+  and only register 5 keeps rotating — the real underlying mechanism is
+  more complex than a simple 4-register 24-byte ring buffer, and fully
+  reverse-engineering it would need real ROM single-step tracing beyond
+  what this feature's scope justified. So the ALPHA row only ever shows
+  the most recent ~7 characters, not the full 24-character register —
+  an accepted, documented limitation, not a bug to fix later without
+  new information.
+
+**Grid layout — pixel-exact, derived from the user's own mockup**
+(`reference-material/display-mockups/NHD14432_Elite_User_Mockup_Colored.png`,
+analyzed programmatically, not eyeballed): 24 columns × 4 rows of 3px-wide
+× 5px-tall character cells, 6px pitch (`x = 1 + 6·col`, `y = 1 + 6·row`),
+exactly filling the 144px width. A single punctuation pixel per column
+sits in the gap after it (`x = 5 + 6·col`), at three possible y-offsets
+matching normal mode's `dot_top`/`comma`/`dot_bottom` marks, scaled down
+to one pixel each. Punctuation semantics for a *number* (numeric rows
+only — see column layout below) are a deliberate mapping, not
+self-evident from the mockup, which only showed solid placeholder boxes:
+`dot_bottom` (after column 1) is always the decimal point — fixed
+position, since numbers are always rendered `D.DDDDDDDDD`; `comma`
+(after column 10) is always the mantissa/exponent separator; `dot_top`
+is deliberately unused/reserved (using it for anything would create the
+same off-by-one ambiguity a sign glyph in a punctuation dot would).
+Column assignment for a numeric row: col 0 = mantissa sign (`-` or
+blank), cols 1-10 = the 10 mantissa digits, col 11 = exponent sign,
+cols 12-13 = the 2 exponent digits, cols 14-23 unused. The annunciator
+row reuses the exact same 12-annunciator table normal mode uses
+(`hp41_annunciator_bits`/`_pixels`/`_offset`/`_count`, from
+`font-tables/hp41_display_tables.h`) with a fixed **+5 pixel y-offset**
+— confirmed by measuring the mockup's annunciator markers against the
+existing `hp41_annunciator_pixel_map.json` coordinates: identical
+x-ranges for all 12, uniformly shifted down. No new annunciator table
+needed.
+
+**Font — hand-authored, not extracted.** The mockup showed cell
+*positions* only (solid `#C1C1C1` placeholder boxes), not real glyph
+shapes, so `font-tables/hp41_elite_font_table.json` (a per-code 3×5
+bitmap, `{"code": ["row0",...,"row4"]}`, each row 3 chars of `'0'`/`'1'`)
+plus its generator `font-tables/gen_elite_font_table.py` (deliberately a
+separate script from `gen_display_tables.py`, not a mode of it — a
+bitmap font doesn't fit that script's named-segment pipeline at all) is
+new, hand-designed artwork. Covers all 80 HP-41 display codes that
+already render *something* in the normal 14-segment font (0, 1, 4, 5, 6,
+12, 13, 29, 32-101, 126, 127 — checked directly against
+`hp41_font_table.json`, not re-derived from CLAUDE.md's "Font" section's
+summary, which doesn't fully match: several codes below 32 do have real
+segment data, just no identified real-world meaning, marked `'?'` in
+`hp41_font_table.txt`). Full legibility for all 80 at 3px width is not
+achievable — some letters (e.g. `M`/`N`/`W`) are best-effort
+approximations, an accepted tradeoff of the resolution, not an
+oversight. The ALPHA row's content is always plain ASCII already (per
+the register-access finding above), so it indexes straight into this
+table with no decode step.
+
+**Trigger mechanism — orthogonal to, and non-disruptive of, normal key
+handling.** `firmware/hp41_key_bridge.c`'s `push_key_tracked()` — the
+single choke point every real keypress goes through, whether it arrived
+as a plain ASCII byte (`tabcode[]` lookup) or a resolved `"[NAME]"`
+bracket escape — watches for the matching *keycode* sequence (`0x32`
+XEQ, `0xc4` ALPHA, `0x72` L, `0xc0` E, `0xc0` E, `0x84` T, `0xc4` ALPHA)
+via a small progress counter. Every keycode of the sequence is still
+pushed to `keybuffer[]` normally *except* the final ALPHA, swallowed
+only once the full sequence actually completes — so a real
+`XEQ ALPHA <other name> ALPHA` sequence is completely unaffected, and no
+buffering/replay of already-sent keystrokes is ever needed. `"[LEET]"`
+is also accepted as a bracket-escape alias (mirroring `"[CLRMEM]"`'s
+precedent) for testing/tooling convenience. While active, a *bare*
+ALPHA press (not part of a completing trigger sequence) is separately
+intercepted and swallowed to toggle the alpha row instead —
+`hp41_key_bridge_set_elite_mode_active()` tells the bridge whether this
+interception should be active, since Elite Mode's own on/off state is
+owned by `main.c`, not the key bridge. **Known, accepted caveat**: since
+the closing ALPHA is swallowed, the ROM is left mid-alpha-entry (with
+"LEET" in its own alpha buffer) after every toggle — confirmed
+non-fatal but not deeply chased further (e.g. whether re-triggering to
+toggle off cleanly restarts the ROM's alpha buffer or compounds onto it
+is unconfirmed) — a real, documented tradeoff, not a bug.
+
+**Real bug found and fixed on first real-hardware use, the same session
+this feature was built:** the first version tracked the trigger at the
+raw-byte level (watching `hp41_key_bridge_feed_byte()`'s incoming bytes
+directly, before bracket resolution) — every native test passed, since
+they fed the raw ctrl-X/ctrl-A bytes directly, but on real hardware the
+sequence **never fired at all**, always falling through to the ROM as a
+genuine (and nonexistent) program name, showing `NONEXISTENT`. Root
+cause: `tools/hp41_keyboard_gui.py`'s XEQ and ALPHA buttons send
+`"[XEQ]"`/`"[ALPHA]"` bracket escapes, not the raw control bytes — those
+are consumed entirely by the `"[NAME]"` bracket state machine and
+resolved via `handle_named_key()`, which called the old unconditional
+`push_key()` directly, never touching the byte-level tracker at all. No
+amount of native testing caught this because the tests only exercised
+raw-byte input, never the bracket-escape path a real user (via the GUI)
+actually uses. Fixed by moving detection down to `push_key_tracked()`
+itself — the one point both the raw-byte and bracket-escape paths
+converge on before anything reaches `keybuffer[]` — which fixes both
+uniformly and, as a bonus, correctly handles a sequence typed partly one
+way and partly the other. `tests/key_bridge_test.c` gained a direct
+regression test feeding the exact bracket-escaped form
+(`"[XEQ][ALPHA]LEET[ALPHA]"`) to make sure this specific gap can't
+reopen silently. A reminder worth keeping in mind for future features
+in this file: a host test that only feeds raw bytes doesn't prove a
+feature works for every real input path — the bracket-escape route is
+just as "real" as raw bytes here, since it's literally how the primary
+GUI tool sends most named keys.
+
+**`main.c` integration**: `elite_mode_active`/`alpha_row_active` are
+plain locals, polled once per loop iteration alongside the existing
+`"[CLRMEM]"` check, branching the existing `if (fdsp)` render block
+between `hp41_display_compute_framebuffer()` and the two new elite
+renderers. Toggling either flag sets a same-iteration `redraw_needed`
+flag to force an immediate render rather than waiting for the next
+`fdsp` — this needed a real fix, not just an addition: since the
+sequence's closing ALPHA is swallowed (never reaches `keybuffer[]`), the
+system is very likely already asleep with no key queued at the exact
+moment the toggle fires (each of the sequence's earlier real keypresses
+plausibly already triggered its own wake→process→`POWOFF`→asleep cycle,
+per this project's well-documented "auto power off after every
+keystroke" behavior) — the pre-existing `if (asleep) { ... continue; }`
+idle path had to be taught to fall through to the render block on
+`redraw_needed` instead of skipping it, while still correctly leaving
+`executeNUT()` un-called (the CPU must stay genuinely halted).
+
+**Testing**: `tests/elite_display_bridge_test.c` (new, exact-pixel-count
+style like `tests/display_bridge_test.c`, but doesn't need to boot the
+ROM at all — `espaceRAM` is poked directly with hand-computed nibble
+patterns, verified against a standalone Python re-implementation of the
+same unpack logic before being hardcoded) covers register decode, the
+4-row grid's exact lit-pixel counts (including a sum-of-parts check
+across all 4 rows), the annunciator +5 y-offset re-derived from the
+existing table, and the alpha row. `tests/key_bridge_test.c` gained
+checks for the trigger sequence, its case-insensitivity, near-miss/
+broken-sequence non-interference with real key sequences, the
+`"[LEET]"` alias, and the bare-ALPHA sub-toggle.
+
 ## Software keyboard GUI — `tools/hp41_keyboard_gui.py`
 
 A Tkinter window displaying
@@ -1071,9 +1273,10 @@ investigation is ever resumed.
   available as a hardware-debugging aid.
 - **`hp41_arduino_bridge.h`/`.c`** — the dormant fallback display path
   (see "Arduino display bridge" above).
-- **`hp41_display_bridge.h`/`.c`**, **`hp41_key_bridge.h`/`.c`**,
-  **`hp41_key_hold_bridge.h`/`.c`**, **`hp41_persist_state.h`/`.c`**,
-  **`hp41_persist_flash.h`/`.c`** — see their sections above.
+- **`hp41_display_bridge.h`/`.c`**, **`hp41_elite_display_bridge.h`/`.c`**,
+  **`hp41_key_bridge.h`/`.c`**, **`hp41_key_hold_bridge.h`/`.c`**,
+  **`hp41_persist_state.h`/`.c`**, **`hp41_persist_flash.h`/`.c`** — see
+  their sections above.
 - **`main.c`** — full system integration. `stdio_init_all()`, then
   `st7920_init()`/`st7920_clear()`, then `nut_boot()`, then a
   `hp41_persist_flash_load()` attempt (see "Continuous memory" above) -
@@ -1234,6 +1437,9 @@ font-tables/     HP-41 font/segment table: generated tables
                  (hp41_display_tables.c/h) + the three JSON sources
                  gen_display_tables.py reads. Original .ai/.pdf source
                  files live in reference-material/font-tables-source/.
+                 Also holds Elite User Mode's separate, hand-authored 3x5
+                 bitmap font (hp41_elite_font_table.json/.c/.h,
+                 gen_elite_font_table.py) - see "Elite User Mode" above.
 pico-sdk/        Official raspberrypi/pico-sdk checkout (dependency) -
                  gitignored, not in this repo; see "Toolchain setup"
                  below for how to fetch a matching copy
