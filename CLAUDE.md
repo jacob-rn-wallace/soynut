@@ -75,7 +75,7 @@ summary below, which only sketches enough to orient new code.
 
 **Scope — applies to:** this project's own original C (`firmware/*.c/.h`
 except `emu41gcc_compat/` interop shims where noted below,
-`lcd_bringup/*.c/.h`, `tests/*.c`, `tools/*.c`) and Python
+`lcd_bringup/*.c/.h`, `tests/*.c`, `tools/*.c`, `sim/*.c/.h`) and Python
 (`tools/*.py`, `font-tables/gen_display_tables.py`, `roms/*.py`), plus
 any future edits to `Arduino NHD14432/NHD14432_DisplayBridge/*.ino`
 (project-authored, C-like — apply the C rules there).
@@ -1411,6 +1411,122 @@ the coldstart flag the ROM's self-test checks — and `mode_printer=-1`).
 `roms/rom_images.c` is declared `extern` directly in `nut_rom.c`; update
 both together if the wired ROM set ever changes.
 
+## Host-native simulator — `sim/`
+
+A self-contained "virtual Pico 2 + virtual LCD" that boots the real ROM
+on the real emulated Nut CPU core and lets the firmware logic be
+exercised on a development machine with no physical hardware at all —
+built so the physical prototype (Pico 2, LCD, level shifters) could be
+freed up for other projects without losing the ability to keep
+developing/testing this one. Confirmed working: cold boot correctly
+shows `MEMORY LOST` (same 207-lit-pixel render `tests/display_bridge_test.c`
+independently verifies, since it's the exact same
+`hp41_display_compute_framebuffer()` call), and continuous memory
+round-trips correctly across a process restart via a local file.
+
+**Architecture: the same hardware/logic split this project already
+has, with three small sim-side replacements for the hardware-boundary
+files.** Exactly like real firmware, only `firmware/main.c`,
+`firmware/st7920.c`, and `firmware/hp41_persist_flash.c` touch
+anything hardware-specific — every other file (`emu41gcc/nutcpu.c`/
+`display.c`, `firmware/emu41gcc_compat/*.c`, `hp41_display_bridge.c`,
+`hp41_elite_display_bridge.c`, `hp41_key_bridge.c`,
+`hp41_key_hold_bridge.c`, `hp41_persist_state.c`, `roms/rom_images.c`,
+the font tables) is pure C already proven to build/run natively by
+`tests/Makefile`, and `sim/Makefile` links those exact same files
+unmodified. `sim/`'s own new files replace just the hardware boundary:
+
+- **`sim_main.c`** — adapted line-by-line from `firmware/main.c`; every
+  piece of *logic* (CLRMEM handling, Elite Mode toggles, the
+  asleep/wake transition, the hold-vs-batch `executeNUT()` split, the
+  `fdsp`-gated render, POWOFF's `dspon`-conditional clear, the
+  deferred continuous-memory save) is unchanged — only the
+  hardware-facing calls are replaced. Unlike `main.c`'s own
+  Rule-4-grandfathered monolithic `main()` (see "Coding standard"
+  above), this file's loop body is factored into named `static`
+  helpers, since that exception is specific to the original file and
+  doesn't extend to new code.
+- **`sim_display.c`/`.h`** — implements `firmware/st7920.h`'s exact
+  3-function contract (`st7920_init`/`_clear`/`_draw_frame`) via SDL2
+  instead of GPIO: a window (144×32 scaled 6x by default —
+  `SIM_DISPLAY_SCALE`) that only ever blits the already-decoded 1bpp
+  framebuffer bytes it's handed, on the same `fdsp`/`redraw_needed`-
+  gated call sites real firmware uses (never a fixed timer), so redraw
+  cadence stays faithful to real hardware. No segment-decode logic
+  here — `hp41_display_bridge.c` remains the single source of truth
+  for what a pixel means.
+- **`sim_persist_file.c`/`.h`** — implements `firmware/hp41_persist_flash.h`'s
+  exact 3-function contract via a local file
+  (`sim/soynut_sim_persist.bin`, gitignored) instead of QSPI flash,
+  delegating to the same unmodified `hp41_persist_validate()` real
+  firmware uses.
+- **`sim_keyboard.c`/`.h`** — maps SDL keyboard events to the exact
+  same wire-protocol bytes `tools/hp41_keyboard_gui.py` sends (see
+  `sim/README.md` for the key table), reproducing that tool's
+  `PressMode.THRESHOLD` tap-vs-hold behavior (`HOLD_ENGAGE_MS=150`,
+  same constant/value) in C. Every byte still funnels through the
+  unmodified `hp41_key_bridge_feed_byte()` — this file only ever
+  decides *which* bytes to send, never touches `keybuffer[]`/hold
+  state directly.
+- **`sim_clock.c`/`.h`** — host timing (`SDL_GetTicks()` for
+  `to_ms_since_boot(get_absolute_time())`, `nanosleep()` for
+  `sleep_us()` — chosen over `SDL_Delay()` specifically because its
+  1ms granularity is too coarse for the throttle's legitimately
+  sub-millisecond values at `TARGET_INSTRUCTIONS_PER_SEC`).
+- **`sim_pty.c`/`.h`** — an optional virtual serial port (a PTY, via
+  macOS's `openpty()` from `<util.h>`) letting
+  `tools/hp41_keyboard_gui.py`'s clickable photo-keyboard drive the sim
+  too, with **zero code changes to that tool** — its `SerialLink` class
+  just does `serial.Serial(port, BAUD_RATE, timeout=0.2)` with no
+  DTR/RTS handling, so it attaches to the PTY's slave path exactly like
+  a real port via `--port` (auto-detect won't find it - it only matches
+  `usbmodem` device names). `sim_main.c` prints the slave path at
+  startup and drains bytes arriving on it through the exact same
+  `hp41_key_bridge_feed_byte()` sink SDL keypresses already use (via
+  `sim_drain_pty_bytes()`, mirroring `firmware/main.c`'s
+  `drain_usb_bytes()` shape) — both input paths coexist with no
+  special-casing. `sim_dbg()` also tees every log line to the PTY, so a
+  connected GUI's serial log pane shows the same trace real hardware's
+  shared USB-CDC connection would. **Keyboard only** — the SDL window
+  remains the sole display; no framebuffer streaming to the GUI (see
+  below). **A real bug found and fixed during development, not
+  theoretical:** `openpty()`'s default slave termios has echo/canonical
+  mode on, so bytes `sim_dbg()` wrote to the master (intended only for
+  an external reader) were echoed straight back and re-read by
+  `sim_pty_read_byte()` as if they were incoming keypresses — confirmed
+  as spurious wake/render/POWOFF cycles with no real input at all.
+  Fixed by passing a `cfmakeraw()`-initialized `termios` to `openpty()`
+  so the PTY never echoes. `sim_main.c` also writes the slave path to
+  `build/soynut_sim.port` (a small discovery file, needing no extra
+  `.gitignore` entry since `build/` is already ignored wholesale) so a
+  wrapper script can find it without parsing log text — see
+  `sim/run_with_gui.sh` (`make -C sim run-gui`), which starts both
+  `soynut_sim` and the GUI together, attaches the GUI to the discovered
+  port automatically, and tears both down when the GUI window closes.
+
+**Known, deliberate differences from real hardware:** (1) on a clean
+exit (window closed), `sim_main.c` flushes any not-yet-idle-flushed
+continuous-memory save immediately rather than leaving up to
+`PERSIST_SAVE_DELAY_MS` of state genuinely at risk the way a real power
+yank would — a host process has a clean-exit path real bare-metal
+firmware doesn't, so there's no reason not to use it. (2) An invalid
+opcode exits the process (`exit(EXIT_FAILURE)`) rather than spinning
+forever in a halt loop — the real firmware's halt loop is itself an
+explicit, documented Rule 2 exception (see `DEVIATIONS.md`) needed only
+because bare-metal code has no OS to hand control back to; host
+software does, so a clean exit is the equivalent "explicit recovery"
+without introducing an unbounded loop.
+
+**Explicitly not built:** streaming the LCD framebuffer back to
+`tools/hp41_keyboard_gui.py` so that tool's own window could render the
+display too — a deliberate scope decision (confirmed with the user),
+not an oversight: it would need a binary framebuffer protocol
+multiplexed with the existing text debug log on the same PTY link, real
+added complexity for no benefit when the SDL window already renders the
+LCD correctly. The GUI is keyboard-input-only against the sim; see
+`sim/README.md` for how to build/run, the current keyboard mapping, and
+the two-terminal GUI-attach workflow.
+
 ## Directory map
 
 Everything below is load-bearing for the system (build/run/test some
@@ -1447,6 +1563,9 @@ roms/            ROM converter/format tools + roms/README.md's BYO
                  instructions. The actual .ROM files and generated
                  rom_images.c are gitignored, not in this repo - see
                  "ROM images" above
+sim/             Host-native "virtual Pico 2 + virtual LCD" simulator -
+                 no pico-sdk/hardware dependency, plain Makefile like
+                 tests/. See "Host-native simulator" below.
 tests/           Native (non-Pico) tests - confirm the ROM boots, the
                  display bridge renders correctly, and the key bridge
                  parses input correctly, no hardware needed. Makefile

@@ -21,3 +21,7 @@ pico-sdk
 roms/*.ROM
 roms/*.rom
 roms/rom_images.c
+
+# sim/'s host-file-backed continuous-memory snapshot - local runtime
+# state, not source, same treatment as roms/rom_images.c above.
+sim/soynut_sim_persist.bin

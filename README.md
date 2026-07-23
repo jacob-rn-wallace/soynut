@@ -45,6 +45,11 @@ Working end-to-end today:
   USER-mode label, hold too long and the press nullifies — a real,
   documented HP-41 behavior, working against the genuine ROM logic that
   drives it.
+- A host-native simulator (`sim/`) runs the exact same real ROM on the
+  exact same real Nut CPU core with zero physical hardware — an SDL2
+  window stands in for the LCD, and either your keyboard or the same
+  clickable keyboard GUI stands in for USB-serial keypresses. See "Try
+  it without the hardware" below.
 
 This is very much a project in progress, not a finished product. Still
 open:
@@ -105,6 +110,24 @@ dormant, in case either is ever needed again:
   at the LCD's own pins, but the display never lit up, and the root
   cause was never pinned down (see "Status" above) — not blocking
   anything now that the parallel link works.
+
+## Try it without the hardware
+
+No Pico, LCD, or level shifters required: `sim/` is a host-native
+simulator that boots the same real ROM on the same real Nut CPU core
+the physical build uses, rendering to an SDL2 window instead of the
+physical LCD.
+
+```
+brew install sdl2        # macOS
+make -C sim run          # SDL window + your keyboard
+make -C sim run-gui      # SDL window + the clickable keyboard GUI, wired up automatically
+```
+
+You still need your own ROM images either way (see below) — the
+simulator runs the exact same emulator core and ROM files real hardware
+does. See `sim/README.md` for the full keyboard mapping, how
+continuous memory works in the simulator, and more.
 
 ## Getting started
 
