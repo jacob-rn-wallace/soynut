@@ -99,21 +99,25 @@
  * compatibility requirement, so reusing Magellan's own canonical order
  * directly avoids an unnecessary id-mapping table.
  *
- * Indices 14/15 are punctuation pseudo-segments, same idiom as
+ * Indices 14-16 are punctuation pseudo-segments, same idiom as
  * HP41_SEG_DOT_BOTTOM/etc. in hp41_display_tables.h: not part of any
  * character's bitmask, plotted by whichever code (dm41x_display_bridge.c
  * or hp41_register_format.c) decided a cell needs one, mirroring
  * hp41_elite_display_bridge.c's plot_elite_numeric_punctuation() in
  * spirit but riding in the real gap-after-a-cell position, not a hand-
  * picked single pixel. DOT is the decimal point; SEP is the mantissa/
- * exponent separator mark - both rasterized from Magellan's actual
- * DECIMAL_POINT/COMMA polygons, which this table's generous cell pitch
- * has room for (unlike Elite Mode's cramped 6px pitch).
+ * exponent separator mark; COLON is the classic-line view's colon
+ * punctuation (period/colon/comma is exactly hp41_display_bridge.c's
+ * own existing punct-code range - see "Display bridge" in CLAUDE.md) -
+ * all three rasterized from Magellan's actual DECIMAL_POINT/COMMA/COLON
+ * polygons, which this table's generous cell pitch has room for (unlike
+ * Elite Mode's cramped 6px pitch).
  * @{
  */
 #define HP41_DM41X_SEG_DOT 14
 #define HP41_DM41X_SEG_SEP 15
-#define HP41_DM41X_NUM_SEGMENTS 16
+#define HP41_DM41X_SEG_COLON 16
+#define HP41_DM41X_NUM_SEGMENTS 17
 /** @} */
 
 /** One pixel offset: (x, y) local to a character cell. May legitimately
@@ -142,9 +146,9 @@ typedef struct {
 extern const uint16_t hp41_dm41x_char_segments[128];
 
 /**
- * @brief All 16 segments'/marks' pixel offsets, flattened.
+ * @brief All 17 segments'/marks' pixel offsets, flattened.
  *
- * Look up index i's (0-15, see HP41_DM41X_SEG_DOT/_SEP above) pixels via
+ * Look up index i's (0-16, see HP41_DM41X_SEG_DOT/_SEP/_COLON above) pixels via
  * hp41_dm41x_segment_pixels[hp41_dm41x_segment_pixel_offset[i] + k] for
  * k in [0, hp41_dm41x_segment_pixel_count[i]).
  */

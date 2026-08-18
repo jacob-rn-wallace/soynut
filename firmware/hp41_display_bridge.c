@@ -30,18 +30,16 @@ extern int lcd_ann;
 /**
  * @brief Decode one HP-41 raw display register code to an ASCII character.
  *
- * Same raw-code-to-ASCII decode as emu41gcc/display.c's static
- * alpha41() - reimplemented here (rather than exposing that static
- * function, which would mean touching the vendored file) because this
- * exact decode is what's already validated correct: it's what produced
- * "MEMORY LOST" via display_to_buf() in the first Nut CPU boot test
- * (see CLAUDE.md, tests/nut_smoke_test.c).
- *
- * @param v Raw HP-41 display code for one cell:
- *          (lcd_c[i]<<8) | ((lcd_b[i]&3)<<4) | lcd_a[i].
- * @return The decoded ASCII character code (0-127).
+ * See hp41_display_bridge.h for the public contract (no longer `static`
+ * as of Phase 3b of the Magellan/DM41X plan - hp41_dm41x_display_bridge.c
+ * needs it too). Same raw-code-to-ASCII decode as emu41gcc/display.c's
+ * static alpha41() - reimplemented here (rather than exposing that
+ * static function, which would mean touching the vendored file) because
+ * this exact decode is what's already validated correct: it's what
+ * produced "MEMORY LOST" via display_to_buf() in the first Nut CPU boot
+ * test (see CLAUDE.md, tests/nut_smoke_test.c).
  */
-static int hp41_decode_ascii(int v)
+int hp41_decode_ascii(int v)
 {
     v &= 0x13f;
     assert(v >= 0 && v <= 0x13f);

@@ -26,10 +26,10 @@ const uint16_t hp41_dm41x_char_segments[128] = {
   0x22C0, 0x100C, 0x2048, 0x1480, 0x0000, 0x2840, 0x0000, 0x0000,
 };
 
-// 806 total (x,y) pixel offsets across all 16 segments/marks, local to a 29x39px cell
-// (indices 14/15's marks legitimately extend past that box - see
+// 835 total (x,y) pixel offsets across all 17 segments/marks, local to a 29x39px cell
+// (indices 14-16's marks legitimately extend past that box - see
 // hp41_dm41x_font_table.h's hp41_dm41x_pixel_t doc comment).
-const hp41_dm41x_pixel_t hp41_dm41x_segment_pixels[806] = {
+const hp41_dm41x_pixel_t hp41_dm41x_segment_pixels[835] = {
   {6,0}, {7,0}, {8,0}, {9,0}, {10,0}, {11,0}, {12,0}, {13,0},
   {14,0}, {15,0}, {16,0}, {17,0}, {18,0}, {19,0}, {20,0}, {21,0},
   {22,0}, {23,0}, {24,0}, {25,0}, {26,0}, {27,0}, {28,0}, {6,1},
@@ -130,15 +130,19 @@ const hp41_dm41x_pixel_t hp41_dm41x_segment_pixels[806] = {
   {30,35}, {27,36}, {28,36}, {29,36}, {30,36}, {27,33}, {28,33}, {29,33},
   {27,34}, {28,34}, {29,34}, {30,34}, {27,35}, {28,35}, {29,35}, {30,35},
   {27,36}, {28,36}, {29,36}, {30,36}, {28,37}, {29,37}, {28,38}, {29,38},
-  {28,39}, {29,39}, {28,40}, {29,40}, {28,41}, {28,42},
+  {28,39}, {29,39}, {28,40}, {29,40}, {28,41}, {28,42}, {27,13}, {28,13},
+  {29,13}, {27,14}, {28,14}, {29,14}, {30,14}, {27,15}, {28,15}, {29,15},
+  {30,15}, {27,16}, {28,16}, {29,16}, {30,16}, {27,22}, {28,22}, {29,22},
+  {27,23}, {28,23}, {29,23}, {30,23}, {27,24}, {28,24}, {29,24}, {30,24},
+  {27,25}, {28,25}, {29,25},
 };
 
-// Index with 0-13 = SEGMENT_ORDER, 14 = HP41_DM41X_SEG_DOT, 15 = HP41_DM41X_SEG_SEP.
-const uint16_t hp41_dm41x_segment_pixel_offset[16] = {
-  0, 90, 179, 261, 353, 435, 524, 544, 563, 601, 634, 668, 700, 733, 766, 781,
+// Index with 0-13 = SEGMENT_ORDER, 14 = HP41_DM41X_SEG_DOT, 15 = HP41_DM41X_SEG_SEP, 16 = HP41_DM41X_SEG_COLON.
+const uint16_t hp41_dm41x_segment_pixel_offset[17] = {
+  0, 90, 179, 261, 353, 435, 524, 544, 563, 601, 634, 668, 700, 733, 766, 781, 806,
 };
-const uint16_t hp41_dm41x_segment_pixel_count[16] = {
-  90, 89, 82, 92, 82, 89, 20, 19, 38, 33, 34, 32, 33, 33, 15, 25,
+const uint16_t hp41_dm41x_segment_pixel_count[17] = {
+  90, 89, 82, 92, 82, 89, 20, 19, 38, 33, 34, 32, 33, 33, 15, 25, 29,
 };
 
 // Summary (for reference, not compiled):
@@ -158,3 +162,4 @@ const uint16_t hp41_dm41x_segment_pixel_count[16] = {
 //   [13] n     33 px @ offset 733
 //   [14] DOT   15 px @ offset 766
 //   [15] SEP   25 px @ offset 781
+//   [16] COLON  29 px @ offset 806

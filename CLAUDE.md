@@ -741,6 +741,59 @@ DM41X plan), both host-testable with no ROM boot needed:
     rules, not just reverse-engineered from the implementation — see
     `tests/register_format_test.c`'s own header comment.
 
+### DM41X display bridge — `firmware/hp41_dm41x_display_bridge.h`/`.c`
+
+Phase 3b of the Magellan/DM41X plan: `hp41_dm41x_display_compute_framebuffer(fb,
+view)` renders either of the display's two view modes into a Sharp-panel
+framebuffer (`HP41_DM41X_FB_SIZE` = 12000 bytes, all-white/0xFF cleared,
+segments lit by *clearing* bits — see "Sharp Memory LCD bring-up" above
+for why that's the opposite of `hp41_display_bridge.h`'s polarity).
+
+- **`HP41_DM41X_VIEW_STACK`**: T/Z/Y/X, each row `hp41_read_display_format()`
+  + `hp41_elite_decode_register()` + `hp41_register_format.h`'s
+  `hp41_format_number()`, plotted left-justified starting at column 0 of
+  a 12-column row (Elite Mode's own `HP41_ELITE_REG_*` order — T/Z/Y/X
+  top to bottom). X is formatted through the same general path as T/Z/Y
+  rather than special-cased to read the live `lcd_a/b/c` directly — both
+  are correct (X's live display content and a fresh
+  `hp41_format_number()` call against the same current format state
+  necessarily agree), and one shared path is simpler than two.
+- **`HP41_DM41X_VIEW_CLASSIC_LINE`**: the exact same `lcd_a/b/c/lcd_ann`
+  decode `hp41_display_bridge.c`'s own `hp41_display_compute_framebuffer()`
+  already does (down to reusing its now-non-`static` `hp41_decode_ascii()`
+  directly, rather than a third duplicate copy — `tools/powoff_trace.c`
+  already has one, kept for its own cross-build-system reason), just
+  plotted through the DM41X font table's bigger cells. Period/colon/comma
+  punctuation map onto `HP41_DM41X_SEG_DOT`/`_COLON`/`_SEP` respectively —
+  note comma is a *single* combined mark here (rasterized from Magellan's
+  own dot+tail `COMMA` polygon), unlike the original 144x32 table's
+  `dot_bottom`+`comma_tail` pair.
+- **Both views share one plotting primitive** (`plot_char()`/
+  `plot_segment()`) and the one full-alphabet DM41X font table — a
+  Stack-view digit/minus field and a classic-line ASCII character both
+  just resolve to an index into `hp41_dm41x_char_segments`, no
+  view-specific rendering path.
+- **Annunciators (`BAT`/`USER`/`G`/`RAD`/`SHIFT`/`PRGM`/`ALPHA`/etc,
+  driven by `lcd_ann`) are not yet rendered anywhere in this display.**
+  Deliberately deferred, not silently dropped: unlike segments/digits,
+  annunciators aren't 14-segment glyphs at all — they're small dedicated
+  icon/text labels, so extending this display to show them needs new
+  icon artwork at the panel's scale (a Magellan-side geometry task,
+  the same way `segments.py`/`charset_41.py` themselves were built) before
+  there's anything here to generate a pixel table from or plot. The
+  classic-line view's `render_classic_line_view()` has an explicit
+  comment marking where this would hook in.
+- `tests/dm41x_display_bridge_test.c` covers both views host-side, no
+  ROM boot needed (pokes `espaceRAM`/`lcd_a/b/c/lcd_ann` directly, same
+  approach as `elite_display_bridge_test.c`). **Watch for**: raw display
+  code 0 legitimately decodes to `'@'`, not blank (confirmed by
+  `hp41_decode_ascii()`'s own `v<=0x1f` branch) — a zeroed `lcd_a/b/c`
+  is 12 `'@'` characters, not an empty line. The test's own
+  `fill_classic_line(' ')` helper exists specifically to establish a
+  genuinely blank baseline; a real bug in this test (not the production
+  code) before that helper existed is preserved as a "watch for" here
+  rather than silently forgotten.
+
 ## Display bridge — `firmware/hp41_display_bridge.h`/`.c`
 
 - `hp41_display_compute_framebuffer(uint8_t *fb)` — pure logic, no
@@ -1616,7 +1669,7 @@ No ARM toolchain needed — `tests/Makefile` builds and runs every test
 (`nut_smoke_test`, `display_bridge_test`, `key_bridge_test`,
 `key_hold_test`, `hold_trace_test`, `persist_state_test`,
 `elite_display_bridge_test`, `register_decode_test`,
-`register_format_test`) with the system `cc`:
+`register_format_test`, `dm41x_display_bridge_test`) with the system `cc`:
 
 ```
 make -C tests run

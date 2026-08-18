@@ -27,7 +27,7 @@ STRICT := -Wall -Wextra -Wpedantic -Werror
 INC := -I$(ROOT)/emu41gcc -I$(ROOT)/firmware/emu41gcc_compat -I$(ROOT)/firmware -I$(ROOT)/font-tables
 NUT_STUBS_INC := -include $(ROOT)/firmware/emu41gcc_compat/nut_stubs.h
 
-TESTS := nut_smoke_test display_bridge_test key_bridge_test key_hold_test hold_trace_test persist_state_test elite_display_bridge_test register_decode_test register_format_test
+TESTS := nut_smoke_test display_bridge_test key_bridge_test key_hold_test hold_trace_test persist_state_test elite_display_bridge_test register_decode_test register_format_test dm41x_display_bridge_test
 
 .PHONY: all run clean
 all: $(addprefix $(BUILD)/,$(TESTS))
@@ -88,6 +88,12 @@ $(BUILD)/hp41_register_decode.o: $(ROOT)/firmware/hp41_register_decode.c | $(BUI
 
 $(BUILD)/hp41_register_format.o: $(ROOT)/firmware/hp41_register_format.c | $(BUILD)
 	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
+$(BUILD)/hp41_dm41x_display_bridge.o: $(ROOT)/firmware/hp41_dm41x_display_bridge.c | $(BUILD)
+	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
+$(BUILD)/hp41_dm41x_font_table.o: $(ROOT)/font-tables/hp41_dm41x_font_table.c | $(BUILD)
+	$(CC) $(STD) $(INC) -c -o $@ $<
 
 # --- Our own test files: strict warnings apply. ---
 
@@ -150,6 +156,17 @@ $(BUILD)/register_decode_test: $(BUILD)/register_decode_test.o $(BUILD)/nut_glob
 # references espaceRAM in that one function.
 $(BUILD)/register_format_test: $(BUILD)/register_format_test.o $(BUILD)/nut_globals.o \
                                 $(BUILD)/hp41_register_format.o
+	$(CC) -o $@ $^
+
+# Same lighter link set as elite_display_bridge_test's own reasoning:
+# pokes espaceRAM/lcd_a/b/c/lcd_ann directly, no ROM boot needed - needs
+# nut_globals.o (espaceRAM) and display.o (lcd_a/b/c/lcd_ann's real
+# storage) plus every module the bridge itself depends on.
+$(BUILD)/dm41x_display_bridge_test: $(BUILD)/dm41x_display_bridge_test.o $(BUILD)/nut_globals.o \
+                                     $(BUILD)/display.o $(BUILD)/hp41_dm41x_display_bridge.o \
+                                     $(BUILD)/hp41_display_bridge.o $(BUILD)/hp41_display_tables.o \
+                                     $(BUILD)/hp41_register_decode.o $(BUILD)/hp41_register_format.o \
+                                     $(BUILD)/hp41_dm41x_font_table.o
 	$(CC) -o $@ $^
 
 run: all

@@ -68,6 +68,7 @@ try:
     from data.segments import (  # type: ignore[import-not-found]
         CELL_HEIGHT,
         CELL_WIDTH,
+        COLON,
         COMMA,
         DECIMAL_POINT,
         SEGMENT_ORDER,
@@ -121,10 +122,14 @@ NEEDED_CHARS = "".join(sorted(ch for ch in CHAR_SEGMENTS if ord(ch) < NUM_ASCII_
 # Segment index order: bits 0-13 of the character mask follow Magellan's
 # own SEGMENT_ORDER directly (see hp41_dm41x_font_table.h for why this
 # table doesn't reuse hp41_display_tables.h's different SEGMENT_BIT_ORDER
-# convention). Indices 14/15 are the two punctuation pseudo-segments.
+# convention). Indices 14-16 are the three punctuation pseudo-segments
+# (period, comma/separator, colon) - the classic-line view needs all
+# three to show anything the original single-line display could
+# (hp41_display_bridge.c's own punct switch handles period/colon/comma).
 SEG_INDEX_DOT = 14
 SEG_INDEX_SEP = 15
-NUM_SEGMENTS = 16
+SEG_INDEX_COLON = 16
+NUM_SEGMENTS = 17
 
 # Supersampling factor for the polygon-fill rasterizer below, and the
 # per-pixel coverage fraction (of ss*ss subpixels) needed to call an
@@ -148,9 +153,9 @@ class DisplayTable(TypedDict):
     Attributes:
         char_segments: hp41_dm41x_char_segments[128] - 14-bit segment mask per code.
         populated: Sorted list of the codes that got a real mask.
-        flat: Flattened (x, y) pixel offsets across all 16 segments/marks.
-        offsets: Per-segment start index into flat, indices 0-15.
-        counts: Per-segment pixel count, indices 0-15.
+        flat: Flattened (x, y) pixel offsets across all 17 segments/marks.
+        offsets: Per-segment start index into flat, indices 0-16.
+        counts: Per-segment pixel count, indices 0-16.
     """
 
     char_segments: list[int]
@@ -281,13 +286,13 @@ def _compute_char_segments() -> tuple[list[int], list[int]]:
 
 
 def _flatten_segments() -> tuple[list[Point], list[int], list[int]]:
-    """Rasterize all 14 segments plus the 2 punctuation marks, flattened.
+    """Rasterize all 14 segments plus the 3 punctuation marks, flattened.
 
     Returns:
         (flat, offsets, counts): flat is every segment's/mark's pixels
-        concatenated, in SEGMENT_ORDER then [DOT, SEP] order (indices
-        0-15, matching hp41_dm41x_font_table.h's HP41_DM41X_SEG_* /
-        bit-order documentation).
+        concatenated, in SEGMENT_ORDER then [DOT, SEP, COLON] order
+        (indices 0-16, matching hp41_dm41x_font_table.h's
+        HP41_DM41X_SEG_* / bit-order documentation).
     """
     flat: list[Point] = []
     offsets = []
@@ -297,7 +302,7 @@ def _flatten_segments() -> tuple[list[Point], list[int], list[int]]:
         offsets.append(len(flat))
         counts.append(len(pts))
         flat.extend(pts)
-    for mark in (DECIMAL_POINT, COMMA):
+    for mark in (DECIMAL_POINT, COMMA, COLON):
         pts = _rasterize(mark)
         offsets.append(len(flat))
         counts.append(len(pts))
@@ -352,7 +357,7 @@ def emit_c(d: DisplayTable) -> None:
     flat, offsets, counts = d["flat"], d["offsets"], d["counts"]
     print(f"// {len(flat)} total (x,y) pixel offsets across all {NUM_SEGMENTS} "
           f"segments/marks, local to a {CELL_WIDTH_PX}x{CELL_HEIGHT_PX}px cell")
-    print("// (indices 14/15's marks legitimately extend past that box - see")
+    print("// (indices 14-16's marks legitimately extend past that box - see")
     print("// hp41_dm41x_font_table.h's hp41_dm41x_pixel_t doc comment).")
     print(f"const hp41_dm41x_pixel_t hp41_dm41x_segment_pixels[{len(flat)}] = {{")
     for i in range(0, len(flat), 8):
@@ -362,7 +367,7 @@ def emit_c(d: DisplayTable) -> None:
     print()
 
     print("// Index with 0-13 = SEGMENT_ORDER, 14 = HP41_DM41X_SEG_DOT, "
-          "15 = HP41_DM41X_SEG_SEP.")
+          "15 = HP41_DM41X_SEG_SEP, 16 = HP41_DM41X_SEG_COLON.")
     print(f"const uint16_t hp41_dm41x_segment_pixel_offset[{NUM_SEGMENTS}] = {{")
     print("  " + ", ".join(str(v) for v in offsets) + ",")
     print("};")
@@ -372,7 +377,7 @@ def emit_c(d: DisplayTable) -> None:
 
     print()
     print("// Summary (for reference, not compiled):")
-    names = [*SEGMENT_ORDER, "DOT", "SEP"]
+    names = [*SEGMENT_ORDER, "DOT", "SEP", "COLON"]
     for i, name in enumerate(names):
         print(f"//   [{i:2d}] {name:4s} {counts[i]:3d} px @ offset {offsets[i]}")
 
