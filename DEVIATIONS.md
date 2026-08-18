@@ -27,10 +27,11 @@ authoritative over any inline comment if the two ever disagree.
 **Scope of the exception:** `firmware/emu41gcc_compat/` (`nut_globals.c`,
 `nut_stubs.h`/`.c`, `nut_rom.c`/`.h`, `mem.h`, `dos.h`) and the specific
 `extern` declarations in `firmware/hp41_display_bridge.c`,
-`firmware/hp41_arduino_bridge.c`, `firmware/hp41_key_hold_bridge.c`, and
-`firmware/hp41_persist_state.c` that reach directly into `emu41gcc`'s own
-state (`lcd_a`/`lcd_b`/`lcd_c`/`lcd_ann`, `flagKB`, `regK`, `keybuffer[]`,
-`lgkeybuf`, `tabpage[]`, `espaceRAM[]`, etc.).
+`firmware/hp41_arduino_bridge.c`, `firmware/hp41_key_hold_bridge.c`,
+`firmware/hp41_persist_state.c`, `firmware/hp41_elite_display_bridge.c`,
+and `firmware/hp41_register_decode.c` that reach directly into
+`emu41gcc`'s own state (`lcd_a`/`lcd_b`/`lcd_c`/`lcd_ann`, `flagKB`,
+`regK`, `keybuffer[]`, `lgkeybuf`, `tabpage[]`, `espaceRAM[]`, etc.).
 
 **Why:** `emu41gcc` is a vendored, unmodifiable black box (see
 `CLAUDE.md`'s "The Nut CPU core" section) — we are never allowed to edit

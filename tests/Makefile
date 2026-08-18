@@ -27,7 +27,7 @@ STRICT := -Wall -Wextra -Wpedantic -Werror
 INC := -I$(ROOT)/emu41gcc -I$(ROOT)/firmware/emu41gcc_compat -I$(ROOT)/firmware -I$(ROOT)/font-tables
 NUT_STUBS_INC := -include $(ROOT)/firmware/emu41gcc_compat/nut_stubs.h
 
-TESTS := nut_smoke_test display_bridge_test key_bridge_test key_hold_test hold_trace_test persist_state_test elite_display_bridge_test
+TESTS := nut_smoke_test display_bridge_test key_bridge_test key_hold_test hold_trace_test persist_state_test elite_display_bridge_test register_decode_test register_format_test
 
 .PHONY: all run clean
 all: $(addprefix $(BUILD)/,$(TESTS))
@@ -83,6 +83,12 @@ $(BUILD)/hp41_persist_state.o: $(ROOT)/firmware/hp41_persist_state.c | $(BUILD)
 $(BUILD)/hp41_elite_display_bridge.o: $(ROOT)/firmware/hp41_elite_display_bridge.c | $(BUILD)
 	$(CC) $(STD) -fcommon $(STRICT) $(INC) -c -o $@ $<
 
+$(BUILD)/hp41_register_decode.o: $(ROOT)/firmware/hp41_register_decode.c | $(BUILD)
+	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
+$(BUILD)/hp41_register_format.o: $(ROOT)/firmware/hp41_register_format.c | $(BUILD)
+	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
 # --- Our own test files: strict warnings apply. ---
 
 $(BUILD)/%_test.o: %_test.c | $(BUILD)
@@ -128,8 +134,22 @@ $(BUILD)/persist_state_test: $(BUILD)/persist_state_test.o $(BUILD)/nut_globals.
 # declaration of it) but not nutcpu.o/nut_stubs.o/nut_rom.o/rom_images.o,
 # since nothing here ever calls executeNUT() or boots the ROM.
 $(BUILD)/elite_display_bridge_test: $(BUILD)/elite_display_bridge_test.o $(BUILD)/nut_globals.o $(BUILD)/display.o \
-                                     $(BUILD)/hp41_elite_display_bridge.o \
+                                     $(BUILD)/hp41_elite_display_bridge.o $(BUILD)/hp41_register_decode.o \
                                      $(BUILD)/hp41_display_tables.o $(BUILD)/hp41_elite_font_table.o
+	$(CC) -o $@ $^
+
+# Same lighter link set as elite_display_bridge_test's own reasoning
+# above: pokes espaceRAM directly, no ROM boot needed.
+$(BUILD)/register_decode_test: $(BUILD)/register_decode_test.o $(BUILD)/nut_globals.o \
+                                $(BUILD)/hp41_register_decode.o
+	$(CC) -o $@ $^
+
+# Doesn't call hp41_read_display_format() (no espaceRAM state to poke -
+# every case builds an hp41_elite_number_t directly), but nut_globals.o
+# is still needed to satisfy the link since hp41_register_format.c
+# references espaceRAM in that one function.
+$(BUILD)/register_format_test: $(BUILD)/register_format_test.o $(BUILD)/nut_globals.o \
+                                $(BUILD)/hp41_register_format.o
 	$(CC) -o $@ $^
 
 run: all

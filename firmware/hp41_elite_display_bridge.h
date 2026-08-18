@@ -13,38 +13,15 @@
 #ifndef SOYNUT_HP41_ELITE_DISPLAY_BRIDGE_H
 #define SOYNUT_HP41_ELITE_DISPLAY_BRIDGE_H
 
-#include <stdbool.h>
 #include <stdint.h>
 
-/** Stack register indices into espaceRAM, matching emu41gcc's own status-register layout. */
-enum {
-    HP41_ELITE_REG_T = 0,
-    HP41_ELITE_REG_Z = 1,
-    HP41_ELITE_REG_Y = 2,
-    HP41_ELITE_REG_X = 3,
-};
-
-/** One decoded HP-41 stack register, as sign/digit fields ready to plot - never recombined into a single number. */
-typedef struct {
-    bool mantissa_negative;
-    uint8_t mantissa_digits[10]; /**< [0] = leading/integer digit, [9] = last fractional digit, each 0-9. */
-    bool exponent_negative;
-    uint8_t exponent_tens; /**< 0-9. */
-    uint8_t exponent_units; /**< 0-9. */
-} hp41_elite_number_t;
-
-/**
- * @brief Decode one stack register (T/Z/Y/X) directly from espaceRAM.
- *
- * Pure logic, no hardware access - safe to call/test on a host build.
- * See CLAUDE.md for the confirmed register format (14 packed BCD
- * nibbles: exponent sign, 2 exponent digits, 10 mantissa digits,
- * mantissa sign).
- *
- * @param stack_index One of the HP41_ELITE_REG_* values above.
- * @param out         Decoded fields, fully overwritten.
- */
-void hp41_elite_decode_register(int stack_index, hp41_elite_number_t *out);
+/* HP41_ELITE_REG_*, hp41_elite_number_t, and hp41_elite_decode_register()
+ * used to live here - extracted into their own hardware/display-agnostic
+ * module (Phase 3 of the Magellan/DM41X plan) since the new DM41X-style
+ * display needs the decode without any of this file's 144x32-specific
+ * pixel-plotting code. Re-included here so existing callers of this
+ * header don't need to change. */
+#include "hp41_register_decode.h"
 
 /**
  * @brief Render Elite Mode's 4-row stack grid into an ST7920 framebuffer.

@@ -34,6 +34,7 @@ add_executable(soynut
         bitmaps.c
         hp41_display_bridge.c
         hp41_elite_display_bridge.c
+        hp41_register_decode.c
         hp41_key_bridge.c
         hp41_key_hold_bridge.c
         hp41_arduino_bridge.c
@@ -67,6 +68,7 @@ set_source_files_properties(
         emu41gcc_compat/nut_globals.c
         emu41gcc_compat/nut_rom.c
         hp41_elite_display_bridge.c
+        hp41_register_decode.c
         hp41_key_bridge.c
         hp41_key_hold_bridge.c
         hp41_persist_state.c
@@ -107,6 +109,7 @@ set(SOYNUT_OWN_SOURCES
         bitmaps.c
         hp41_display_bridge.c
         hp41_elite_display_bridge.c
+        hp41_register_decode.c
         hp41_key_bridge.c
         hp41_key_hold_bridge.c
         hp41_arduino_bridge.c

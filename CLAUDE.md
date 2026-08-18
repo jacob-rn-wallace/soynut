@@ -692,6 +692,55 @@ just a plausible-looking coincidence).
   was not attempted and remains unknown — out of scope, not needed here.
 - Reproduce with `make -C tools && ./tools/build/flag_array_trace`.
 
+### Register decode/format — `firmware/hp41_register_decode.h`/`.c`, `firmware/hp41_register_format.h`/`.c`
+
+Two small, hardware/display-agnostic modules (Phase 3a of the Magellan/
+DM41X plan), both host-testable with no ROM boot needed:
+
+- **`hp41_register_decode.h`/`.c`** — `HP41_ELITE_REG_*`,
+  `hp41_elite_number_t`, and `hp41_elite_decode_register()`, extracted
+  out of `hp41_elite_display_bridge.c`/`.h` (which still includes the
+  new header and works unchanged) so the new DM41X-style display bridge
+  doesn't need to compile in Elite Mode's 144x32-specific pixel-plotting
+  code just to reuse the decode. See "Elite User Mode" below for the
+  full register-format provenance this is built on.
+- **`hp41_register_format.h`/`.c`** — `hp41_read_display_format()`
+  (reads the FIX/SCI/ENG state found above) and `hp41_format_number()`,
+  a from-scratch reimplementation of the HP-41C/CV Owner's Handbook's
+  documented FIX/SCI/ENG display rules (real, mode-aware formatting —
+  not Elite Mode's always-full-mantissa-plus-exponent shortcut). Output
+  is a sequence of up to 12 per-cell fields (digit/minus, each carrying
+  optional decimal-point/exponent-separator gap-mark flags) matching the
+  real hardware's actual 12-column variable-width layout — see
+  `font-tables/hp41_dm41x_font_table.h` for why that's 12 columns, not
+  Elite Mode's 14.
+  - **Rounding, not truncation**, with carry propagation — including the
+    case where a carry cascades past the mantissa's own leading digit
+    (e.g. `FIX 2` on `9.999999999` → `"10.00"`, not `"10.10"` — a real
+    bug caught by `tests/register_format_test.c` during development: the
+    fractional digits' source index into the rounded mantissa has to
+    shift after such a carry, not restart from the mantissa's own
+    beginning).
+  - **`FIX n` auto-falls back to `SCI n`-style formatting** when the
+    value is too large or too small to show a real digit within `n`
+    fractional places, matching the Handbook's documented behavior in
+    both directions.
+  - **`ENG n`** reuses the same core layout logic as `SCI n`, shifting
+    the exponent to the nearest lower multiple of 3 and the mantissa's
+    decimal point by 1-2 digits accordingly.
+  - **Zero** is handled as its own case (exactly representable in every
+    mode) rather than running through the general normalized-mantissa
+    math, which assumes a nonzero leading digit.
+  - **Overflow trim**: at the largest digit counts combined with a
+    negative sign and/or negative exponent, the naturally-formatted
+    result can need more than 12 real cells (the real hardware faces
+    this identical physical limit) — trailing mantissa fractional digits
+    are dropped until it fits, a deliberate, documented compression
+    rule, not silent truncation or a buffer overrun.
+  - Test values were derived by hand from the Handbook's documented
+    rules, not just reverse-engineered from the implementation — see
+    `tests/register_format_test.c`'s own header comment.
+
 ## Display bridge — `firmware/hp41_display_bridge.h`/`.c`
 
 - `hp41_display_compute_framebuffer(uint8_t *fb)` — pure logic, no
@@ -1018,7 +1067,14 @@ sequences through it, and diffs `espaceRAM` before/after each keystroke:
   10 mantissa digits (nibble 3 = least significant/last-typed digit,
   nibble 12 = most significant/leading digit), nibble 13 = mantissa
   sign. No formatter for this exists anywhere in `emu41gcc` — the
-  decode in `hp41_elite_decode_register()` is new code.
+  decode in `hp41_elite_decode_register()` is new code, now living in
+  its own hardware/display-agnostic module,
+  `firmware/hp41_register_decode.h`/`.c` (extracted out of this file in
+  Phase 3 of the Magellan/DM41X plan — see "Sharp Memory LCD bring-up"
+  above — since the new DM41X-style display needs the decode without
+  any of Elite Mode's 144x32-specific pixel-plotting code). This file
+  includes that header and still uses `HP41_ELITE_REG_*`/
+  `hp41_elite_number_t`/`hp41_elite_decode_register()` unchanged.
 - **ALPHA-mode text entry** has no dedicated register either. Empirical
   finding: `espaceRAM` register 5 reliably holds the most-recently-typed
   ~7 characters as plain 8-bit ASCII (not the sparse 10-bit LCD code —
@@ -1556,8 +1612,11 @@ neither should be committed.
 
 ### Native (host) tests
 
-No ARM toolchain needed — `tests/Makefile` builds and runs all five
-with the system `cc`:
+No ARM toolchain needed — `tests/Makefile` builds and runs every test
+(`nut_smoke_test`, `display_bridge_test`, `key_bridge_test`,
+`key_hold_test`, `hold_trace_test`, `persist_state_test`,
+`elite_display_bridge_test`, `register_decode_test`,
+`register_format_test`) with the system `cc`:
 
 ```
 make -C tests run
@@ -1761,17 +1820,21 @@ sim/             Host-native "virtual Pico 2 + virtual LCD" simulator -
                  no pico-sdk/hardware dependency, plain Makefile like
                  tests/. See "Host-native simulator" below.
 tests/           Native (non-Pico) tests - confirm the ROM boots, the
-                 display bridge renders correctly, and the key bridge
-                 parses input correctly, no hardware needed. Makefile
-                 builds/runs all five (`make -C tests run`) with Power
-                 of 10 Rule 10's strict-warnings scoping - see "Native
-                 (host) tests" above.
+                 display bridge renders correctly, the key bridge parses
+                 input correctly, and (as of the Magellan/DM41X plan's
+                 Phase 3a) register decode/format are correct, no
+                 hardware needed. Makefile builds/runs every test
+                 (`make -C tests run`) with Power of 10 Rule 10's
+                 strict-warnings scoping - see "Native (host) tests"
+                 above.
 tools/           Native (non-Pico) diagnostic tools - nut_disasm.c (ROM
                  disassembler using emu41gcc's own desas41.c),
+                 flag_array_trace.c (found the FIX/SCI/ENG display-format
+                 espaceRAM location - see "Display-format state" above),
                  powoff_trace.c (single-step ROM/wake-cycle tracer), and
                  hp41_keyboard_gui.py (clickable software keyboard).
-                 Makefile builds the two C tools (`make -C tools`),
-                 same Rule 10 scoping as tests/Makefile.
+                 Makefile builds the C tools (`make -C tools`), same
+                 Rule 10 scoping as tests/Makefile.
 HP-41CX_..._(removed_background,_colour_adjustment).jpg
                  Keyboard photo (CC BY-SA 3.0, Wikimedia Commons - see
                  tools/hp41_keyboard_gui.py's header for attribution) the
