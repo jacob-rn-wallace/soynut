@@ -446,6 +446,36 @@ int main(void) {
             }
             dbg("soynut: rendering display state #%d (PC=0x%04X, instr=%d, checksum=0x%02X)\n",
                    render_count, regPC, cptinstr, checksum);
+
+            // TEMPORARY (Phase 0 diagnostic - see the Magellan/DM41X plan):
+            // decode all four stack registers unconditionally, regardless
+            // of elite_mode_active, and print them. This never touches
+            // Elite Mode's key-bridge trigger/interception machinery (the
+            // suspected home of the "ALPHA annunciator stuck lit" bug), so
+            // it isolates a single question: is hp41_elite_decode_register()
+            // itself correct against real ROM-computed register contents on
+            // real hardware, independent of the separately-recorded "elite
+            // grid always shows zero" bug. Drive known key sequences (e.g.
+            // 1 ENTER 2 ENTER 3) and compare these printed values against
+            // the expected real stack contents. Remove once confirmed.
+            {
+                static const char *const reg_names[4] = { "T", "Z", "Y", "X" };
+                for (int r = 0; r < 4; r++) {
+                    hp41_elite_number_t num;
+                    hp41_elite_decode_register(r, &num);
+                    dbg("soynut: [phase0] reg %s = %c%d%d%d%d%d%d%d%d%d%d E%c%d%d\n",
+                        reg_names[r],
+                        num.mantissa_negative ? '-' : '+',
+                        num.mantissa_digits[0], num.mantissa_digits[1],
+                        num.mantissa_digits[2], num.mantissa_digits[3],
+                        num.mantissa_digits[4], num.mantissa_digits[5],
+                        num.mantissa_digits[6], num.mantissa_digits[7],
+                        num.mantissa_digits[8], num.mantissa_digits[9],
+                        num.exponent_negative ? '-' : '+',
+                        num.exponent_tens, num.exponent_units);
+                }
+            }
+
             // ASCII-art framebuffer dump - disabled (too verbose for
             // day-to-day use over USB serial). Checksum above is still
             // enough for a quick ground-truth sanity check; uncomment

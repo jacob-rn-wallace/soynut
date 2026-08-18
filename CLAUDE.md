@@ -75,8 +75,10 @@ summary below, which only sketches enough to orient new code.
 
 **Scope — applies to:** this project's own original C (`firmware/*.c/.h`
 except `emu41gcc_compat/` interop shims where noted below,
-`lcd_bringup/*.c/.h`, `tests/*.c`, `tools/*.c`, `sim/*.c/.h`) and Python
-(`tools/*.py`, `font-tables/gen_display_tables.py`, `roms/*.py`), plus
+`lcd_bringup/*.c/.h`, `dm41x_bringup/*.c/.h` except `third_party/` where
+noted below, `tests/*.c`, `tools/*.c`, `sim/*.c/.h`) and Python
+(`tools/*.py`, `font-tables/gen_display_tables.py`,
+`font-tables/gen_dm41x_segment_table.py`, `roms/*.py`), plus
 any future edits to `Arduino NHD14432/NHD14432_DisplayBridge/*.ino`
 (project-authored, C-like — apply the C rules there).
 
@@ -84,6 +86,11 @@ any future edits to `Arduino NHD14432/NHD14432_DisplayBridge/*.ino`
 - `emu41gcc/` — a git submodule and a hard "never edit" black box (see
   "The Nut CPU core" above); there's no such thing as "new code" there
   from this project's side.
+- `dm41x_bringup/third_party/` — vendored third-party source (from
+  `pico_sharpmem_display`, LGPL-2.1), a hard "never edit" black box for
+  the same reason as `emu41gcc/` above, just file-vendored instead of a
+  submodule since no upstream git URL was discoverable for it — see
+  "Sharp Memory LCD bring-up" below.
 - `pico-sdk/` — an external dependency, not project code.
 - `Arduino NHD14432/NHD14432_POC/` — explicitly preserved as an
   untouched, hardware-validated snapshot (see "Directory map"); it isn't
@@ -144,15 +151,15 @@ any future edits to `Arduino NHD14432/NHD14432_DisplayBridge/*.ino`
    existing pattern for new hard-invariant failures rather than
    inventing a new one.
 
-   **`-UNDEBUG` note:** `firmware/CMakeLists.txt` and
-   `lcd_bringup/CMakeLists.txt` both append `-UNDEBUG` when compiling
-   this project's own sources, specifically to counteract the Pico
-   SDK's default `-DNDEBUG` (Release build type) and keep `assert()`
-   genuinely active on real hardware. If you add a new CMake target
-   for Pico-side code, it needs this too, or every assertion in it is a
-   silent no-op — see `DEVIATIONS.md` for how this was actually caught
-   (an ARM-only `-Werror=unused-variable` from a variable an `assert()`
-   would otherwise have read).
+   **`-UNDEBUG` note:** `firmware/CMakeLists.txt`,
+   `lcd_bringup/CMakeLists.txt`, and `dm41x_bringup/CMakeLists.txt` all
+   append `-UNDEBUG` when compiling this project's own sources,
+   specifically to counteract the Pico SDK's default `-DNDEBUG` (Release
+   build type) and keep `assert()` genuinely active on real hardware. If
+   you add a new CMake target for Pico-side code, it needs this too, or
+   every assertion in it is a silent no-op — see `DEVIATIONS.md` for how
+   this was actually caught (an ARM-only `-Werror=unused-variable` from a
+   variable an `assert()` would otherwise have read).
 6. **Smallest possible variable scope.** General good practice, applies
    as-is. Note `nut_globals.c`'s file-scope globals
    (`tabpage`/`espaceRAM`/etc.) are a required exception, not a
@@ -185,14 +192,18 @@ any future edits to `Arduino NHD14432/NHD14432_DisplayBridge/*.ino`
 10. **Compile with the most pedantic warnings enabled, zero warnings;
     static analysis.** Wired in and enforced, zero warnings on this
     project's own sources as of the most recent rewrite:
-    - `firmware/CMakeLists.txt` / `lcd_bringup/CMakeLists.txt`:
-      `-Wall -Wextra -Wpedantic -Werror` via `set_property(SOURCE
-      ${SOYNUT_OWN_SOURCES} APPEND PROPERTY COMPILE_OPTIONS ...)` —
-      `APPEND`/`set_property` rather than `target_compile_options()` or
-      `set_source_files_properties()`, both of which either leak onto
-      vendored Pico SDK sources compiled into the same target (confirmed:
-      fails on `pico-sdk`'s own `bootrom.c`) or clobber the `-fcommon`
-      flags already set on the same files.
+    - `firmware/CMakeLists.txt` / `lcd_bringup/CMakeLists.txt` /
+      `dm41x_bringup/CMakeLists.txt`: `-Wall -Wextra -Wpedantic -Werror`
+      via `set_property(SOURCE ${SOYNUT_OWN_SOURCES} APPEND PROPERTY
+      COMPILE_OPTIONS ...)` — `APPEND`/`set_property` rather than
+      `target_compile_options()` or `set_source_files_properties()`, both
+      of which either leak onto vendored Pico SDK sources compiled into
+      the same target (confirmed: fails on `pico-sdk`'s own `bootrom.c`)
+      or clobber the `-fcommon` flags already set on the same files.
+      `dm41x_bringup/` additionally scopes this away from
+      `third_party/pico_sharpmem_display/` (vendored, see "Sharp Memory
+      LCD bring-up" below) the same way `firmware/` already scopes it
+      away from `emu41gcc/`.
     - `tests/Makefile` / `tools/Makefile`: same flags, applied per-object
       so this project's own sources get them and vendored
       `emu41gcc`/generated-table sources don't.
@@ -247,7 +258,8 @@ Power of 10 section holds to C rules):** Doxygen-style `/** ... */`.
   not a compiler gate.
 
 **Python (`tools/*.py`, `font-tables/gen_display_tables.py`,
-`roms/*.py`):** Google-style docstrings, PEP 257-compliant.
+`font-tables/gen_dm41x_segment_table.py`, `roms/*.py`):** Google-style
+docstrings, PEP 257-compliant.
 - Every module gets a top-of-file docstring (already the norm here).
 - Every function/method gets a docstring: a one-line summary (its own
   line, blank line, then any extended description — pydocstyle's D205
@@ -261,11 +273,13 @@ Power of 10 section holds to C rules):** Doxygen-style `/** ... */`.
   missing/malformed docstring would fail any other Rule 10 lint check.
 
 **Generated files are the one exception — document the *generator*,
-not its output.** `font-tables/hp41_display_tables.c`, `Arduino
+not its output.** `font-tables/hp41_display_tables.c`,
+`font-tables/hp41_dm41x_font_table.c`, `Arduino
 NHD14432/NHD14432_DisplayBridge/hp41_display_tables_avr.h`, `Arduino
 NHD14432/NHD14432_DisplayBridge/bitmaps.h`, and the gitignored
 `roms/rom_images.c` are all regenerated wholesale by their respective
 scripts (`font-tables/gen_display_tables.py`,
+`font-tables/gen_dm41x_segment_table.py`,
 `Arduino NHD14432/NHD14432_DisplayBridge/convert_images.py`,
 `roms/rom_to_c.py`) — hand-added comments there would just be silently
 discarded next run. Each already carries an "Auto-generated — do not
@@ -461,6 +475,58 @@ program-step digits `0`-`4`/`PRGM`/`ALPHA`).
 correct for a base HP-41CV with no clock/HP-IL/printer module plugged
 in.
 
+## Sharp Memory LCD bring-up: `dm41x_bringup/`
+
+Standalone Pico SDK project (own `CMakeLists.txt`/`main.c`/`pins.h`, no
+dependency on `emu41gcc`/ROM/key bridge — same isolation pattern as
+`lcd_bringup/`, see "Directory map" below), bringing up a 400x240 Sharp
+Memory LCD (LS027B7DH01) over SPI0 as the first step toward a new
+`dm41x/` display target showing all four HP-41 stack registers at once
+(see the Magellan project's plan file for the full multi-phase picture —
+this directory is Phase 1 of that plan). Permanent, not a staging area
+that gets emptied into `firmware/` later, same as `lcd_bringup/`.
+
+**Vendored dependency:** `third_party/pico_sharpmem_display/` carries
+exactly 4 files (`src/sharpdisp.c` + `include/sharpdisp/sharpdisp.h`,
+`src/bitmap.c` + `include/sharpdisp/bitmap.h`) copied unmodified from a
+local checkout of `pico_sharpmem_display` (LGPL-2.1, `LICENSE` in that
+directory) — file-vendored rather than a submodule only because that
+project had no discoverable upstream git URL to point one at; `emu41gcc/`
+above is the preferred pattern whenever a real URL exists.
+
+**Hard rule: `dm41x_bringup/third_party/` is a black box. Never edit any
+file inside it** — not a one-line fix, not a portability shim, same rule
+and same reasoning as `emu41gcc/`'s above. If something there needs to
+change, that need belongs in `dm41x_bringup/`'s own code calling into it
+instead. See `third_party/pico_sharpmem_display/README-VENDORED.md` for
+exactly what was vendored and why those 4 files specifically (the
+library's higher-level `bitmapshapes`/`bitmaptext`/`bitmapconsole`/
+`doublebuffer` layers are skipped — this project draws by writing packed
+1bpp bytes directly, matching every other display path here, not via a
+runtime drawing-primitive library).
+
+**Wiring:** see `pins.h` for the full pin table and rationale (SPI0,
+CS=GP17/SCK=GP18/MOSI=GP19 — matches the vendored library's own
+`sharpdisp_init_freq_hz()` defaults). No EXTCOMIN pin: VCOM inversion is
+toggled entirely in software on every refresh.
+
+**Framebuffer polarity — the opposite convention from `st7920.c`/
+`firmware/`'s other display code**: this is a light-background/
+dark-segment reflective panel, cleared to `0xFF` (all-white), where a lit
+(visible, dark) segment is drawn by *clearing* the bit, not setting it —
+confirmed against the vendored library's own `bitmap.h` (`BITMAP_BLACK`
+mode: `*data_byte &= ~data`) before writing anything to hardware. Easy to
+get backwards; `main.c`'s test patterns exist specifically to confirm
+this visually on real hardware before anything downstream depends on it.
+
+**Periodic refresh requirement — new territory, unlike the ST7920**: the
+Sharp panel's VCOM/DC-bias health requires periodic refreshing even when
+completely idle (it has no GDRAM of its own the way the ST7920 does).
+`main.c` refreshes unconditionally on a fixed interval, independent of
+whether the displayed content actually changed, deliberately proving out
+the pattern here before the real `dm41x/` firmware target (Phase 4 of the
+plan) needs the same idiom in its main loop.
+
 ## Font / display segment tables
 
 - 14 real character segments + 3 punctuation marks per position (top,
@@ -509,6 +575,122 @@ version of the same tables for the Arduino side
 (`Arduino NHD14432/NHD14432_DisplayBridge/hp41_display_tables_avr.h`),
 from one shared parse of the same JSON — the two can't drift apart in
 content.
+
+### DM41X table — `font-tables/hp41_dm41x_font_table.h`/`.c`
+
+A second, independent font/pixel table for the DM41X-style 400x240 Sharp
+Memory LCD display (see "Sharp Memory LCD bring-up" above) — Phase 2 of
+the Magellan/DM41X plan, and deliberately not a mode of
+`gen_display_tables.py`/an extension of `hp41_display_tables.h`'s own
+tables (different display, different geometry; see below). This display
+is the **primary/only** display for this new physical unit, and needs to
+handle anything the original 12-character HP-41 display could show — not
+just a raw numeric dump — so (unlike this table's original digit-only
+revision) it now covers the **full** character set and is shared by both
+of the display's two view modes (classic-line and Stack — see the plan
+file's Context section for the full reasoning):
+
+- **Source of geometry is Magellan, not this repo's own JSON files.**
+  `font-tables/gen_dm41x_segment_table.py` imports
+  `data/segments.py`/`data/charset_41.py` directly from a sibling
+  Magellan checkout (`/Users/jake/magellan/hp41-display` by default,
+  `MAGELLAN_DIR` env var to override) and rasterizes Magellan's vector
+  polygons at this table's own chosen cell pixel size via a supersampled
+  Pillow fill — see that script's own docstring and Magellan's own
+  CLAUDE.md for the full provenance chain back to Nonpareil. This is the
+  first place in soynut that consumes Magellan as a data source, per the
+  plan both projects were designed around.
+- **Character set is every plain-ASCII entry Magellan's `charset_41.py`
+  defines** (letters, digits, punctuation — ~88 codes) — needed because
+  the classic-line view (see "Sharp Memory LCD bring-up" above) reuses
+  `hp41_decode_ascii()`'s exact output space unchanged, and that
+  function's own contract is "0-127". **Deliberately excludes**
+  `charset_41.py`'s Greek/math symbol entries (`μ`, `≠`, `Σ`, `∠`, `π`,
+  `α`, `β`, `γ`, `σ`, `λ`, `δ`) even though they're real, correctly-shaped
+  glyphs there — `hp41_decode_ascii()` already approximates those as
+  plain ASCII letters (mu → `'u'`, sigma → `'s'`, angle → `'a'`, etc., see
+  its `switch` statement in `hp41_display_bridge.c`), so an entry keyed by
+  the actual Unicode symbol would never be reached through the real
+  decode path anyway, and `ord()` of one isn't in the 0-127 range besides.
+- **Segment bit order is Magellan's own `'a'`-`'n'`, not this repo's
+  `SEGMENT_BIT_ORDER`** — a deliberate, documented deviation from the
+  existing table's convention (see `hp41_dm41x_font_table.h`): this is a
+  from-scratch table for a new display with no bit-level compatibility
+  requirement against the old one, so reusing Magellan's own canonical
+  order avoids an unnecessary id-mapping table the original plan
+  considered but turned out not to need.
+- **Punctuation is rasterized from Magellan's real `DECIMAL_POINT`/
+  `COMMA` polygons**, not a single hand-picked pixel the way Elite
+  Mode's `plot_elite_numeric_punctuation()` does — this table's far more
+  generous cell pitch has room for the actual dot/comma-tail shape.
+  These two marks legitimately have pixel offsets that exceed
+  `HP41_DM41X_CELL_WIDTH_PX`/`_HEIGHT_PX`, spilling into the gap after
+  their own cell by design (see `hp41_dm41x_pixel_t`'s doc comment) —
+  `HP41_DM41X_COL_PITCH_PX`/`_ROW_PITCH_PX` leave enough margin past the
+  nominal cell box specifically to hold this safely.
+- **Grid geometry is 12 columns, true-to-original-size, variable-width** —
+  *not* Elite Mode's always-14-fixed-column convention (a dedicated
+  column per sign/mantissa-digit/exponent-sign/exponent-digit). 12 is the
+  real HP-41's own physical character-cell count; the decimal point and
+  exponent separator ride in the gap after a digit's cell instead of
+  owning a column, matching how the real hardware actually lays out a
+  number. Sized to match the real-world character size already visible
+  on the *current* NHD14432 device (0.42mm/px dot pitch there, 0.147mm/px
+  on the Sharp panel here → ~34px/column would be exact; 12 columns at
+  33px/column is used instead, a ~2.9% trim to exactly fill
+  `DISP_WIDTH_PX`, imperceptible — see `hp41_dm41x_font_table.h`'s header
+  comment for the full derivation). Two views share this same per-cell
+  geometry at different row counts: Stack view (4 rows, `GRID_Y0`/
+  `ROW_PITCH_PX`) and classic-line view (1 row, its own independently
+  centered `GRID_Y0_CLASSIC`). Hand-maintained in
+  `hp41_dm41x_font_table.h`, cross-checked against the generator script's
+  own copy of the same constants at every run
+  (`check_geometry_matches_header()`) — the two files can't silently
+  drift apart in geometry the way they could if only one side knew the
+  numbers.
+- Regenerate with `python3 font-tables/gen_dm41x_segment_table.py >
+  font-tables/hp41_dm41x_font_table.c` (needs Pillow — already a soynut
+  Python dependency, see `tools/hp41_keyboard_gui.py`).
+- **Not yet consumed by any C code.** This is Phase 2 of the plan only —
+  the actual `hp41_register_format.c`/`hp41_dm41x_display_bridge.c` that
+  plot into these tables is Phase 3, and the new `dm41x/` firmware target
+  that links it all together is Phase 4. Both are still ahead.
+
+### Display-format state (FIX/SCI/ENG) — `espaceRAM[114]`/`espaceRAM[115]`
+
+Found via `tools/flag_array_trace.c` (Phase 2a of the Magellan/DM41X
+plan) — the same empirical technique already used to find the stack
+registers, ALPHA echo register, and ALPHA/SHIFT mode bits (see "Elite
+User Mode" below): drive real key sequences through the real ROM, diff
+raw `espaceRAM` bytes before/after, confirmed by a decisive sweep (not
+just a plausible-looking coincidence).
+
+- **`espaceRAM[115]` (register 14, byte 3) = current display digit
+  count (0-9).** Confirmed by an `FIX 0` through `FIX 9` sweep: this
+  byte took on exactly `0x00` through `0x09`, in order, every single
+  time, with zero noise from anything else changing — this is a display-
+  mode-state byte, not a transient "last key pressed" scratch value (it
+  did *not* change when unrelated digits were typed as part of `SF 40`'s
+  flag-number argument).
+- **`espaceRAM[114]` (register 14, byte 2), bits 7/6 = current
+  display mode**: bit 7 set = FIX, bit 6 set = ENG, both clear = SCI —
+  confirmed against `FIX n` (→ `0x80`), `SCI n` (→ `0x00`), and `ENG n`
+  (→ `0x40`), matching the HP-41C/CV Owner's Handbook's own documented
+  flag semantics (flag 40 = FIX, flag 41 = ENG, both clear = SCI)
+  exactly.
+- **This is almost certainly a cached/derived "current display format"
+  value, not necessarily the same storage the general-purpose `SF`/`CF n`
+  FOCAL functions write to** — `SF 40`/`CF 40` (which conceptually also
+  mean "flag 40") did *not* change `espaceRAM[114]` in testing, while
+  `FIX`/`SCI`/`ENG` (dedicated keyboard operations) did every time. For
+  this project's actual need — Phase 3a's register formatter needing to
+  know "what FIX/SCI/ENG mode is *currently active for display*" — this
+  distinction doesn't matter: `espaceRAM[114]`/`[115]` is exactly the
+  live state the real ROM's own display-formatting logic reflects,
+  regardless of what it's called internally. Locating the general 56-bit
+  user/system flag array (for `FS?`/`FC?`-style arbitrary flag testing)
+  was not attempted and remains unknown — out of scope, not needed here.
+- Reproduce with `make -C tools && ./tools/build/flag_array_trace`.
 
 ## Display bridge — `firmware/hp41_display_bridge.h`/`.c`
 
@@ -1549,6 +1731,12 @@ lcd_bringup/     Standalone Pico SDK project (own CMakeLists.txt, no
                  driver. See "Direct Pico→LCD parallel link" above -
                  kept for reuse if the wiring/shifter setup changes
                  again.
+dm41x_bringup/   Standalone Pico SDK project, same isolation pattern as
+                 lcd_bringup/ - Sharp Memory LCD (400x240, SPI) bring-up
+                 for the planned dm41x/ four-register display target. See
+                 "Sharp Memory LCD bring-up" above. third_party/ vendors
+                 pico_sharpmem_display (LGPL-2.1) - hard "never edit"
+                 black box, same as emu41gcc/.
 font-tables/     HP-41 font/segment table: generated tables
                  (hp41_display_tables.c/h) + the three JSON sources
                  gen_display_tables.py reads. Original .ai/.pdf source
@@ -1556,6 +1744,12 @@ font-tables/     HP-41 font/segment table: generated tables
                  Also holds Elite User Mode's separate, hand-authored 3x5
                  bitmap font (hp41_elite_font_table.json/.c/.h,
                  gen_elite_font_table.py) - see "Elite User Mode" above.
+                 Also holds the planned DM41X display's font/pixel table
+                 (hp41_dm41x_font_table.c/h, gen_dm41x_segment_table.py) -
+                 see "DM41X table" above. Unlike the other two, its
+                 source data isn't checked-in JSON but the Magellan
+                 project's own vector geometry, imported directly from a
+                 sibling checkout at generation time.
 pico-sdk/        Official raspberrypi/pico-sdk checkout (dependency) -
                  gitignored, not in this repo; see "Toolchain setup"
                  below for how to fetch a matching copy
