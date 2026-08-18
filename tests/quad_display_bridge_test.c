@@ -1,6 +1,6 @@
 /**
- * @file dm41x_display_bridge_test.c
- * @brief Native (host) test for firmware/hp41_dm41x_display_bridge.c.
+ * @file quad_display_bridge_test.c
+ * @brief Native (host) test for firmware/hp41_quad_display_bridge.c.
  *
  * Same approach as elite_display_bridge_test.c: pokes espaceRAM/lcd_a/b/c
  * directly rather than booting the ROM, so exact pixel counts are usable
@@ -17,7 +17,7 @@
 #define GLOBAL extern
 #include "nutcpu.h"
 
-#include "hp41_dm41x_display_bridge.h"
+#include "hp41_quad_display_bridge.h"
 #include "hp41_register_decode.h"
 
 /* lcd_a/b/c/lcd_ann are plain globals in emu41gcc/display.c (no header
@@ -108,32 +108,32 @@ static void fill_classic_line(int ascii)
 
 /**
  * @brief Read one pixel from a 1bpp, row-major, MSB-first framebuffer
- *        (Sharp panel polarity: 0 = lit, 1 = unlit - see hp41_dm41x_display_bridge.h).
- * @param fb Framebuffer, at least HP41_DM41X_FB_SIZE bytes.
- * @param x  Absolute column, 0 to HP41_DM41X_DISP_WIDTH_PX-1.
- * @param y  Absolute row, 0 to HP41_DM41X_DISP_HEIGHT_PX-1.
+ *        (Sharp panel polarity: 0 = lit, 1 = unlit - see hp41_quad_display_bridge.h).
+ * @param fb Framebuffer, at least HP41_QUAD_FB_SIZE bytes.
+ * @param x  Absolute column, 0 to HP41_QUAD_DISP_WIDTH_PX-1.
+ * @param y  Absolute row, 0 to HP41_QUAD_DISP_HEIGHT_PX-1.
  * @return 1 if lit (bit clear), 0 if not.
  */
 static int get_px(const uint8_t *fb, int x, int y)
 {
     assert(fb != NULL);
-    assert(x >= 0 && x < HP41_DM41X_DISP_WIDTH_PX);
-    assert(y >= 0 && y < HP41_DM41X_DISP_HEIGHT_PX);
-    int bytes_per_row = HP41_DM41X_DISP_WIDTH_PX / 8;
+    assert(x >= 0 && x < HP41_QUAD_DISP_WIDTH_PX);
+    assert(y >= 0 && y < HP41_QUAD_DISP_HEIGHT_PX);
+    int bytes_per_row = HP41_QUAD_DISP_WIDTH_PX / 8;
     return !((fb[y * bytes_per_row + x / 8] >> (7 - (x % 8))) & 1);
 }
 
 /**
  * @brief Count the total number of lit pixels in a framebuffer.
- * @param fb Framebuffer, at least HP41_DM41X_FB_SIZE bytes.
+ * @param fb Framebuffer, at least HP41_QUAD_FB_SIZE bytes.
  * @return Lit pixel count.
  */
 static int count_lit(const uint8_t *fb)
 {
     assert(fb != NULL);
     int lit = 0;
-    for (int y = 0; y < HP41_DM41X_DISP_HEIGHT_PX; y++)
-        for (int x = 0; x < HP41_DM41X_DISP_WIDTH_PX; x++)
+    for (int y = 0; y < HP41_QUAD_DISP_HEIGHT_PX; y++)
+        for (int x = 0; x < HP41_QUAD_DISP_WIDTH_PX; x++)
             lit += get_px(fb, x, y);
     return lit;
 }
@@ -160,10 +160,10 @@ static int check_int(const char *label, int got, int want)
 static int test_blank_framebuffer(void)
 {
     int failures = 0;
-    static uint8_t fb[HP41_DM41X_FB_SIZE];
+    static uint8_t fb[HP41_QUAD_FB_SIZE];
 
     reset_state();
-    hp41_dm41x_display_compute_framebuffer(fb, HP41_DM41X_VIEW_STACK);
+    hp41_quad_display_compute_framebuffer(fb, HP41_QUAD_VIEW_STACK);
     /* All 4 rows show "0.0000" (FIX 4 default) - not literally zero lit
      * pixels, just confirms the buffer isn't stuck all-lit/uninitialized
      * and a full computation runs without crashing. */
@@ -172,7 +172,7 @@ static int test_blank_framebuffer(void)
 
     reset_state();
     fill_classic_line(' '); /* raw code 0 (reset_state()'s default) decodes to '@', not blank */
-    hp41_dm41x_display_compute_framebuffer(fb, HP41_DM41X_VIEW_CLASSIC_LINE);
+    hp41_quad_display_compute_framebuffer(fb, HP41_QUAD_VIEW_CLASSIC_LINE);
     failures += !check_int("classic-line view, 12 spaces: zero pixels lit",
                             count_lit(fb), 0);
 
@@ -186,7 +186,7 @@ static int test_blank_framebuffer(void)
 static int test_stack_view(void)
 {
     int failures = 0;
-    static uint8_t fb[HP41_DM41X_FB_SIZE];
+    static uint8_t fb[HP41_QUAD_FB_SIZE];
 
     /* Mantissa 1234567890, exponent 04, positive - same worked example
      * register_format_test.c and register_decode_test.c both use. */
@@ -194,11 +194,11 @@ static int test_stack_view(void)
 
     reset_state();
     write_register(HP41_ELITE_REG_X, pos);
-    hp41_dm41x_display_compute_framebuffer(fb, HP41_DM41X_VIEW_STACK);
+    hp41_quad_display_compute_framebuffer(fb, HP41_QUAD_VIEW_STACK);
     int with_x = count_lit(fb);
 
     reset_state();
-    hp41_dm41x_display_compute_framebuffer(fb, HP41_DM41X_VIEW_STACK);
+    hp41_quad_display_compute_framebuffer(fb, HP41_QUAD_VIEW_STACK);
     int all_zero = count_lit(fb);
 
     /* X's row has real digits now (FIX 4: "12345.6789") instead of
@@ -212,13 +212,13 @@ static int test_stack_view(void)
      * twice one row's worth more than only X set. */
     reset_state();
     write_register(HP41_ELITE_REG_X, pos);
-    hp41_dm41x_display_compute_framebuffer(fb, HP41_DM41X_VIEW_STACK);
+    hp41_quad_display_compute_framebuffer(fb, HP41_QUAD_VIEW_STACK);
     int x_only = count_lit(fb);
 
     reset_state();
     write_register(HP41_ELITE_REG_T, pos);
     write_register(HP41_ELITE_REG_X, pos);
-    hp41_dm41x_display_compute_framebuffer(fb, HP41_DM41X_VIEW_STACK);
+    hp41_quad_display_compute_framebuffer(fb, HP41_QUAD_VIEW_STACK);
     int t_and_x = count_lit(fb);
 
     failures += !check_int("stack view, T=X=same value: T row adds X row's own pixel count",
@@ -235,7 +235,7 @@ static int test_stack_view(void)
 static int test_classic_line_view(void)
 {
     int failures = 0;
-    static uint8_t fb[HP41_DM41X_FB_SIZE];
+    static uint8_t fb[HP41_QUAD_FB_SIZE];
 
     reset_state();
     /* "AB" left-justified in the leftmost two cells (rest blank),
@@ -243,21 +243,21 @@ static int test_classic_line_view(void)
     fill_classic_line(' ');
     write_classic_cell(0, 'A', 0);
     write_classic_cell(1, 'B', 0);
-    hp41_dm41x_display_compute_framebuffer(fb, HP41_DM41X_VIEW_CLASSIC_LINE);
+    hp41_quad_display_compute_framebuffer(fb, HP41_QUAD_VIEW_CLASSIC_LINE);
     int ab_pixels = count_lit(fb);
     failures += !check_int("classic-line view, 'AB': some pixels lit", ab_pixels > 0, 1);
 
     reset_state();
     fill_classic_line(' ');
     write_classic_cell(0, 'A', 0);
-    hp41_dm41x_display_compute_framebuffer(fb, HP41_DM41X_VIEW_CLASSIC_LINE);
+    hp41_quad_display_compute_framebuffer(fb, HP41_QUAD_VIEW_CLASSIC_LINE);
     int a_only = count_lit(fb);
 
     reset_state();
     fill_classic_line(' ');
     write_classic_cell(0, 'A', 0);
     write_classic_cell(1, 'A', 0);
-    hp41_dm41x_display_compute_framebuffer(fb, HP41_DM41X_VIEW_CLASSIC_LINE);
+    hp41_quad_display_compute_framebuffer(fb, HP41_QUAD_VIEW_CLASSIC_LINE);
     int a_a = count_lit(fb);
 
     failures += !check_int("classic-line view, 'AA': second cell adds first cell's own pixel count",
@@ -266,12 +266,12 @@ static int test_classic_line_view(void)
     /* Punctuation: a period after cell 0 adds exactly the DOT mark's pixel count. */
     reset_state();
     write_classic_cell(0, '0', 0);
-    hp41_dm41x_display_compute_framebuffer(fb, HP41_DM41X_VIEW_CLASSIC_LINE);
+    hp41_quad_display_compute_framebuffer(fb, HP41_QUAD_VIEW_CLASSIC_LINE);
     int digit_only = count_lit(fb);
 
     reset_state();
     write_classic_cell(0, '0', 1); /* period */
-    hp41_dm41x_display_compute_framebuffer(fb, HP41_DM41X_VIEW_CLASSIC_LINE);
+    hp41_quad_display_compute_framebuffer(fb, HP41_QUAD_VIEW_CLASSIC_LINE);
     int digit_with_period = count_lit(fb);
 
     failures += !check_int("classic-line view, period adds pixels beyond the digit alone",
@@ -281,7 +281,7 @@ static int test_classic_line_view(void)
 }
 
 /**
- * @brief Run every DM41X display-bridge check and report pass/fail.
+ * @brief Run every QUAD display-bridge check and report pass/fail.
  * @return 0 on pass, 1 on fail.
  */
 int main(void)

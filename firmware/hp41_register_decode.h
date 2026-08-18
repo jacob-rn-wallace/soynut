@@ -4,13 +4,13 @@
  *        emu41gcc's espaceRAM into sign/digit fields ready to plot.
  *
  * Extracted from hp41_elite_display_bridge.c/.h (Phase 3 of the
- * Magellan/DM41X plan - see
+ * Magellan/QUAD plan - see
  * /Users/jake/.claude/plans/gentle-mapping-dewdrop.md): this is pure
  * logic with no display-specific code, and both the dormant 144x32
- * Elite Mode display and the new DM41X-style display need it - pulling
+ * Elite Mode display and the new QUAD-style display need it - pulling
  * it into its own hardware/display-agnostic module avoids compiling the
  * entire Elite Mode file (its 144x32-specific pixel-plotting, its own
- * annunciator-pixel-table usage) into the new dm41x/ firmware target
+ * annunciator-pixel-table usage) into the new quad/ firmware target
  * just to reuse this one function, and avoids duplicating it.
  *
  * See CLAUDE.md's "Elite User Mode" section for the full empirical

@@ -1,0 +1,134 @@
+cmake_minimum_required(VERSION 3.13)
+
+# Phase 4 of the Magellan/QUAD plan
+# (/Users/jake/.claude/plans/gentle-mapping-dewdrop.md) - the real
+# firmware target for the QUAD-style 400x240 Sharp Memory LCD display,
+# sibling to firmware/ (the 144x32 NHD14432 target) and quad_bringup/
+# (the standalone display-only sandbox this target's SPI driver is
+# vendored from). See CLAUDE.md's "Sharp Memory LCD bring-up" and "QUAD
+# display bridge" sections for the full picture.
+
+if (NOT DEFINED ENV{PICO_SDK_PATH} AND NOT PICO_SDK_PATH)
+    set(PICO_SDK_PATH ${CMAKE_CURRENT_LIST_DIR}/../pico-sdk)
+endif ()
+
+# Pico 2 = RP2350. Must be set before project() - see firmware/CMakeLists.txt's
+# identical note.
+set(PICO_BOARD pico2 CACHE STRING "Board type")
+
+include(pico_sdk_import.cmake)
+
+project(quad C CXX ASM)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+
+pico_sdk_init()
+
+# This target's sources live in three sibling directories, none of them
+# copied: firmware/ (the shared Nut-CPU-emulator bridge/persist/key-bridge
+# code, unchanged from the 144x32 target's own list, minus the display
+# bridges that are specific to that target), emu41gcc/ (vendored Nut CPU
+# core, same submodule firmware/ already uses), and quad_bringup/'s
+# vendored third_party/pico_sharpmem_display/ (the Sharp LCD SPI driver,
+# already proven on real hardware there - see that directory's own
+# README-VENDORED.md; hard "never edit" rule, same as emu41gcc/).
+set(FIRMWARE_DIR ${CMAKE_CURRENT_LIST_DIR}/../firmware)
+set(EMU41GCC_DIR ${CMAKE_CURRENT_LIST_DIR}/../emu41gcc)
+set(ROMS_DIR ${CMAKE_CURRENT_LIST_DIR}/../roms)
+set(FONT_TABLES_DIR ${CMAKE_CURRENT_LIST_DIR}/../font-tables)
+set(SHARPDISP_DIR ${CMAKE_CURRENT_LIST_DIR}/../quad_bringup/third_party/pico_sharpmem_display)
+
+add_executable(quad
+        main.c
+        ${FIRMWARE_DIR}/hp41_quad_display_bridge.c
+        ${FIRMWARE_DIR}/hp41_register_format.c
+        ${FIRMWARE_DIR}/hp41_register_decode.c
+        ${FIRMWARE_DIR}/hp41_ascii_decode.c
+        ${FIRMWARE_DIR}/hp41_key_bridge.c
+        ${FIRMWARE_DIR}/hp41_key_hold_bridge.c
+        ${FIRMWARE_DIR}/hp41_persist_state.c
+        ${FIRMWARE_DIR}/hp41_persist_flash.c
+        ${SHARPDISP_DIR}/src/sharpdisp.c
+        ${SHARPDISP_DIR}/src/bitmap.c
+        ${EMU41GCC_DIR}/nutcpu.c
+        ${EMU41GCC_DIR}/display.c
+        ${FIRMWARE_DIR}/emu41gcc_compat/nut_stubs.c
+        ${FIRMWARE_DIR}/emu41gcc_compat/nut_globals.c
+        ${FIRMWARE_DIR}/emu41gcc_compat/nut_rom.c
+        ${ROMS_DIR}/rom_images.c
+        ${FONT_TABLES_DIR}/hp41_quad_font_table.c
+)
+
+target_include_directories(quad PRIVATE
+        ${FIRMWARE_DIR}
+        ${FIRMWARE_DIR}/emu41gcc_compat
+        ${EMU41GCC_DIR}
+        ${FONT_TABLES_DIR}
+        ${SHARPDISP_DIR}/include
+)
+
+# Same tabpage[]/tabbank[] common-symbol reasoning as
+# firmware/CMakeLists.txt's identical block - see that file's own
+# comment for the full explanation. Scoped to exactly the files that
+# actually include nutcpu.h (confirmed by grep, not copied blindly from
+# firmware/'s own list - this target doesn't compile
+# hp41_elite_display_bridge.c/hp41_display_bridge.c/hp41_arduino_bridge.c
+# at all, and hp41_quad_display_bridge.c/hp41_ascii_decode.c don't
+# include nutcpu.h either).
+set_source_files_properties(
+        ${EMU41GCC_DIR}/display.c
+        ${FIRMWARE_DIR}/emu41gcc_compat/nut_globals.c
+        ${FIRMWARE_DIR}/emu41gcc_compat/nut_rom.c
+        ${FIRMWARE_DIR}/hp41_register_decode.c
+        ${FIRMWARE_DIR}/hp41_register_format.c
+        ${FIRMWARE_DIR}/hp41_key_bridge.c
+        ${FIRMWARE_DIR}/hp41_key_hold_bridge.c
+        ${FIRMWARE_DIR}/hp41_persist_state.c
+        main.c
+        PROPERTIES COMPILE_OPTIONS "-fcommon"
+)
+
+set_source_files_properties(${EMU41GCC_DIR}/nutcpu.c PROPERTIES
+        COMPILE_OPTIONS "-fcommon;-include${FIRMWARE_DIR}/emu41gcc_compat/nut_stubs.h"
+)
+
+# Power of 10, Rule 10: strict warnings for this project's own sources -
+# see firmware/CMakeLists.txt's identical note for why set_property/
+# APPEND rather than set_source_files_properties/target_compile_options.
+# Deliberately excludes the vendored third_party/pico_sharpmem_display/
+# sources (hard "never edit" black box - see that directory's own
+# README-VENDORED.md and CLAUDE.md's "Sharp Memory LCD bring-up"
+# section) the same way firmware/'s own list excludes emu41gcc/*.c.
+set(QUAD_OWN_SOURCES
+        main.c
+        ${FIRMWARE_DIR}/hp41_quad_display_bridge.c
+        ${FIRMWARE_DIR}/hp41_register_format.c
+        ${FIRMWARE_DIR}/hp41_register_decode.c
+        ${FIRMWARE_DIR}/hp41_ascii_decode.c
+        ${FIRMWARE_DIR}/hp41_key_bridge.c
+        ${FIRMWARE_DIR}/hp41_key_hold_bridge.c
+        ${FIRMWARE_DIR}/hp41_persist_state.c
+        ${FIRMWARE_DIR}/hp41_persist_flash.c
+        ${FIRMWARE_DIR}/emu41gcc_compat/nut_stubs.c
+        ${FIRMWARE_DIR}/emu41gcc_compat/nut_globals.c
+        ${FIRMWARE_DIR}/emu41gcc_compat/nut_rom.c
+)
+set_property(SOURCE ${QUAD_OWN_SOURCES} APPEND PROPERTY COMPILE_OPTIONS
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+)
+
+target_link_libraries(quad
+        pico_stdlib
+        hardware_gpio
+        hardware_uart
+        hardware_flash
+        hardware_spi
+)
+
+# USB (native, TinyUSB CDC) for keypress input - same as firmware/'s own
+# choice, see that file's identical comment.
+pico_enable_stdio_usb(quad 1)
+pico_enable_stdio_uart(quad 0)
+
+pico_add_extra_outputs(quad)

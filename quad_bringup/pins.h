@@ -1,10 +1,10 @@
 /**
  * @file pins.h
- * @brief GPIO pin assignments for dm41x_bringup's standalone Sharp Memory
+ * @brief GPIO pin assignments for quad_bringup's standalone Sharp Memory
  *        LCD (LS027B7DH01) bring-up project.
  */
-#ifndef DM41X_BRINGUP_PINS_H
-#define DM41X_BRINGUP_PINS_H
+#ifndef QUAD_BRINGUP_PINS_H
+#define QUAD_BRINGUP_PINS_H
 
 // LS027B7DH01, driven over SPI0 - matches pico_sharpmem_display's own
 // already-confirmed-working pinout exactly (see
@@ -29,4 +29,4 @@
 #define PIN_LCD_SCK   18
 #define PIN_LCD_MOSI  19
 
-#endif // DM41X_BRINGUP_PINS_H
+#endif // QUAD_BRINGUP_PINS_H

@@ -17,7 +17,7 @@
 // Sharp Memory LCD over SPI, with zero dependency on the Nut CPU
 // emulator, ROM, or key bridge - same isolation strategy ../lcd_bringup/
 // already used for the NHD14432. Two things specifically worth
-// confirming here before Phase 2/3 of the DM41X plan build on top of
+// confirming here before Phase 2/3 of the QUAD plan build on top of
 // this (see ../CLAUDE.md's "Sharp Memory LCD bring-up" section):
 //   1. Framebuffer polarity - a lit/dark segment must CLEAR its bit
 //      against a buffer pre-filled with 0xFF, the opposite convention
@@ -65,7 +65,7 @@
  * @brief Print the serial command menu.
  */
 static void print_help(void) {
-    printf("dm41x_bringup: commands: c=clear(white) f=fill(dark) "
+    printf("quad_bringup: commands: c=clear(white) f=fill(dark) "
            "k=checkerboard s=test-shape a=toggle-auto-cycle\n");
 }
 
@@ -126,19 +126,19 @@ static void run_command(int c, struct SharpDisp *disp) {
     assert(disp != NULL);
     switch (c) {
         case 'c':
-            printf("dm41x_bringup: fill 0xFF (white)\n");
+            printf("quad_bringup: fill 0xFF (white)\n");
             do_fill(disp, 0xFF);
             break;
         case 'f':
-            printf("dm41x_bringup: fill 0x00 (dark)\n");
+            printf("quad_bringup: fill 0x00 (dark)\n");
             do_fill(disp, 0x00);
             break;
         case 'k':
-            printf("dm41x_bringup: checkerboard\n");
+            printf("quad_bringup: checkerboard\n");
             do_checkerboard(disp);
             break;
         case 's':
-            printf("dm41x_bringup: test shape (expect a DARK rectangle on white)\n");
+            printf("quad_bringup: test shape (expect a DARK rectangle on white)\n");
             do_test_shape(disp);
             break;
         default:
@@ -157,7 +157,7 @@ int main(void) {
     stdio_init_all();
 
     for (int i = 3; i > 0; i--) {
-        printf("dm41x_bringup: starting in %d...\n", i);
+        printf("quad_bringup: starting in %d...\n", i);
         sleep_ms(1000);
     }
 
@@ -167,7 +167,7 @@ int main(void) {
     static struct SharpDisp disp;
     sharpdisp_init(&disp, disp_buffer, DISP_WIDTH_PX, DISP_HEIGHT_PX, 0xFF,
                    PIN_LCD_CS, PIN_LCD_SCK, PIN_LCD_MOSI, DISP_SPI, DISP_SPI_FREQ_HZ);
-    printf("dm41x_bringup: sharpdisp_init done (%ux%u, %u byte buffer)\n",
+    printf("quad_bringup: sharpdisp_init done (%ux%u, %u byte buffer)\n",
            DISP_WIDTH_PX, DISP_HEIGHT_PX, DISP_BUF_SIZE);
 
     bool auto_cycle = true;
@@ -176,7 +176,7 @@ int main(void) {
     uint32_t last_refresh_ms = last_auto_ms;
     uint32_t last_heartbeat_ms = last_auto_ms;
 
-    printf("dm41x_bringup: auto-cycle ON (white/dark/checkerboard every 2s) - "
+    printf("quad_bringup: auto-cycle ON (white/dark/checkerboard every 2s) - "
            "type any command to take over, 'a' to re-enable auto-cycle\n");
 
     while (true) {
@@ -184,7 +184,7 @@ int main(void) {
         if (c != PICO_ERROR_TIMEOUT) {
             if (c == 'a') {
                 auto_cycle = !auto_cycle;
-                printf("dm41x_bringup: auto-cycle %s\n", auto_cycle ? "ON" : "OFF");
+                printf("quad_bringup: auto-cycle %s\n", auto_cycle ? "ON" : "OFF");
             } else {
                 auto_cycle = false;
                 run_command(c, &disp);
@@ -198,14 +198,14 @@ int main(void) {
             auto_state = (auto_state + 1) % 3;
             assert(auto_state >= 0 && auto_state < 3);
             switch (auto_state) {
-                case 0: printf("dm41x_bringup: [auto] white\n"); do_fill(&disp, 0xFF); break;
-                case 1: printf("dm41x_bringup: [auto] dark\n"); do_fill(&disp, 0x00); break;
-                case 2: printf("dm41x_bringup: [auto] checkerboard\n"); do_checkerboard(&disp); break;
+                case 0: printf("quad_bringup: [auto] white\n"); do_fill(&disp, 0xFF); break;
+                case 1: printf("quad_bringup: [auto] dark\n"); do_fill(&disp, 0x00); break;
+                case 2: printf("quad_bringup: [auto] checkerboard\n"); do_checkerboard(&disp); break;
             }
         }
 
         // Periodic forced refresh, independent of any content change -
-        // proves out the idiom the real dm41x/ target's main loop will
+        // proves out the idiom the real quad/ target's main loop will
         // need for VCOM/DC-bias health during idle periods (see the
         // header comment's note 2).
         if (now_ms - last_refresh_ms >= REFRESH_INTERVAL_MS) {
@@ -215,7 +215,7 @@ int main(void) {
 
         if (now_ms - last_heartbeat_ms >= HEARTBEAT_INTERVAL_MS) {
             last_heartbeat_ms = now_ms;
-            printf("dm41x_bringup: heartbeat t=%lums auto_cycle=%d\n",
+            printf("quad_bringup: heartbeat t=%lums auto_cycle=%d\n",
                    (unsigned long)now_ms, auto_cycle);
         }
     }

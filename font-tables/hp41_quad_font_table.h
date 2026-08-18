@@ -1,19 +1,19 @@
 /**
- * @file hp41_dm41x_font_table.h
- * @brief Compile-time segment/pixel-mapping table for the DM41X-style
+ * @file hp41_quad_font_table.h
+ * @brief Compile-time segment/pixel-mapping table for the QUAD-style
  *        400x240 Sharp Memory LCD display: a full-alphabet, true-to-
  *        original-size 12-column grid shared by both of its view modes.
  *
  * The arrays declared here are defined in the generated
- * hp41_dm41x_font_table.c (by gen_dm41x_segment_table.py, from the
+ * hp41_quad_font_table.c (by gen_quad_segment_table.py, from the
  * Magellan project's original vector geometry - see that script for the
  * exact provenance chain and CLAUDE.md's "Sharp Memory LCD bring-up" /
- * "DM41X table" sections for context). This header itself is
+ * "QUAD table" sections for context). This header itself is
  * hand-maintained, not generated - update it alongside the script if the
  * table shapes or grid geometry ever change.
  *
  * Two view modes share this exact same per-cell geometry (see the
- * Magellan plan file's "DM41X-style Sharp Memory LCD backend" for the
+ * Magellan plan file's "QUAD-style Sharp Memory LCD backend" for the
  * full picture):
  *   - **Classic-line view** (1 row): reuses the live lcd_a/b/c/lcd_ann
  *     buffer unchanged (same decode hp41_display_bridge.c already does
@@ -41,6 +41,11 @@
  *   - 12 columns at ~34px/column is a ~2.7% trim of DISP_WIDTH_PX (411px
  *     wanted vs 400px available) - imperceptible. 14 columns wouldn't
  *     fit at all (480px).
+ *   - Within that 33px column pitch, the glyph-to-gap split is
+ *     deliberately wider than the NHD14432 reference's own ~80/20 ratio
+ *     (25px glyph / 8px gap here, vs ~10/2 there) - confirmed on real
+ *     hardware that the narrower first attempt (29px/4px) put the
+ *     decimal point too close to the following digit to read clearly.
  */
 #pragma once
 
@@ -49,11 +54,11 @@
 /** @name Panel geometry
  *
  * The Sharp Memory LCD (LS027B7DH01) this table targets - see
- * dm41x_bringup/main.c, which brings this exact panel up over SPI.
+ * quad_bringup/main.c, which brings this exact panel up over SPI.
  * @{
  */
-#define HP41_DM41X_DISP_WIDTH_PX  400
-#define HP41_DM41X_DISP_HEIGHT_PX 240
+#define HP41_QUAD_DISP_WIDTH_PX  400
+#define HP41_QUAD_DISP_HEIGHT_PX 240
 /** @} */
 
 /** @name Grid geometry
@@ -67,30 +72,30 @@
  *   - Classic-line view: 1 row, vertically centered independently via
  *     GRID_Y0_CLASSIC (not tied to the 4-row Stack view's own margins).
  *
- * Fit is exact by construction - verified by gen_dm41x_segment_table.py's
+ * Fit is exact by construction - verified by gen_quad_segment_table.py's
  * own check_geometry_matches_header() at generation time, and again by a
- * build-time assert() in dm41x_display_bridge.c, mirroring
+ * build-time assert() in quad_display_bridge.c, mirroring
  * hp41_elite_display_bridge.c's own elite_framebuffer_init() fit-check:
  *   2*GRID_X0 + (NUM_COLS-1)*COL_PITCH_PX + CELL_WIDTH_PX == DISP_WIDTH_PX
  *   2*GRID_Y0 + (NUM_ROWS-1)*ROW_PITCH_PX + CELL_HEIGHT_PX == DISP_HEIGHT_PX
  * @{
  */
-#define HP41_DM41X_NUM_COLS 12
-#define HP41_DM41X_NUM_ROWS 4
-#define HP41_DM41X_CELL_WIDTH_PX  29
-#define HP41_DM41X_CELL_HEIGHT_PX 39
-#define HP41_DM41X_COL_PITCH_PX 33
-#define HP41_DM41X_ROW_PITCH_PX 47
-#define HP41_DM41X_GRID_X0 4
-#define HP41_DM41X_GRID_Y0 30
+#define HP41_QUAD_NUM_COLS 12
+#define HP41_QUAD_NUM_ROWS 4
+#define HP41_QUAD_CELL_WIDTH_PX  25
+#define HP41_QUAD_CELL_HEIGHT_PX 34
+#define HP41_QUAD_COL_PITCH_PX 33
+#define HP41_QUAD_ROW_PITCH_PX 46
+#define HP41_QUAD_GRID_X0 6
+#define HP41_QUAD_GRID_Y0 34
 /** Classic-line view's single-row vertical offset - independently
  *  centered, not derived from the 4-row Stack view's own GRID_Y0. */
-#define HP41_DM41X_GRID_Y0_CLASSIC 100
+#define HP41_QUAD_GRID_Y0_CLASSIC 103
 /** @} */
 
 /** @name Segment/mark indices
  *
- * Bits 0-13 of hp41_dm41x_char_segments' mask follow Magellan's own
+ * Bits 0-13 of hp41_quad_char_segments' mask follow Magellan's own
  * 'a'..'n' segment order (data/segments.py in the Magellan repo) - bit i
  * lights segment "abcdefghijklmn"[i]. Deliberately NOT the same bit
  * order as hp41_display_tables.h's SEGMENT_BIT_ORDER: that table exists
@@ -101,7 +106,7 @@
  *
  * Indices 14-16 are punctuation pseudo-segments, same idiom as
  * HP41_SEG_DOT_BOTTOM/etc. in hp41_display_tables.h: not part of any
- * character's bitmask, plotted by whichever code (dm41x_display_bridge.c
+ * character's bitmask, plotted by whichever code (quad_display_bridge.c
  * or hp41_register_format.c) decided a cell needs one, mirroring
  * hp41_elite_display_bridge.c's plot_elite_numeric_punctuation() in
  * spirit but riding in the real gap-after-a-cell position, not a hand-
@@ -114,10 +119,10 @@
  * Elite Mode's cramped 6px pitch).
  * @{
  */
-#define HP41_DM41X_SEG_DOT 14
-#define HP41_DM41X_SEG_SEP 15
-#define HP41_DM41X_SEG_COLON 16
-#define HP41_DM41X_NUM_SEGMENTS 17
+#define HP41_QUAD_SEG_DOT 14
+#define HP41_QUAD_SEG_SEP 15
+#define HP41_QUAD_SEG_COLON 16
+#define HP41_QUAD_NUM_SEGMENTS 17
 /** @} */
 
 /** One pixel offset: (x, y) local to a character cell. May legitimately
@@ -129,13 +134,13 @@
 typedef struct {
     uint8_t x;
     uint8_t y;
-} hp41_dm41x_pixel_t;
+} hp41_quad_pixel_t;
 
 /**
  * @brief Per-character 14-bit segment mask, for the full character set
  *        this display can render.
  *
- * hp41_dm41x_char_segments[c]: bit i set means segment i (this header's
+ * hp41_quad_char_segments[c]: bit i set means segment i (this header's
  * own 'a'..'n' order above) is lit for ASCII character c. Populated for
  * every character Magellan's data/charset_41.py defines (letters,
  * digits, punctuation, Greek/math symbols) - unlike this table's earlier
@@ -143,17 +148,17 @@ typedef struct {
  * Stack view's rows are just more instances of the same table (see this
  * file's header comment).
  */
-extern const uint16_t hp41_dm41x_char_segments[128];
+extern const uint16_t hp41_quad_char_segments[128];
 
 /**
  * @brief All 17 segments'/marks' pixel offsets, flattened.
  *
- * Look up index i's (0-16, see HP41_DM41X_SEG_DOT/_SEP/_COLON above) pixels via
- * hp41_dm41x_segment_pixels[hp41_dm41x_segment_pixel_offset[i] + k] for
- * k in [0, hp41_dm41x_segment_pixel_count[i]).
+ * Look up index i's (0-16, see HP41_QUAD_SEG_DOT/_SEP/_COLON above) pixels via
+ * hp41_quad_segment_pixels[hp41_quad_segment_pixel_offset[i] + k] for
+ * k in [0, hp41_quad_segment_pixel_count[i]).
  */
-extern const hp41_dm41x_pixel_t hp41_dm41x_segment_pixels[];
-/** Per-segment start index into hp41_dm41x_segment_pixels[]. */
-extern const uint16_t hp41_dm41x_segment_pixel_offset[HP41_DM41X_NUM_SEGMENTS];
-/** Per-segment pixel count, same indexing as hp41_dm41x_segment_pixel_offset. */
-extern const uint16_t hp41_dm41x_segment_pixel_count[HP41_DM41X_NUM_SEGMENTS];
+extern const hp41_quad_pixel_t hp41_quad_segment_pixels[];
+/** Per-segment start index into hp41_quad_segment_pixels[]. */
+extern const uint16_t hp41_quad_segment_pixel_offset[HP41_QUAD_NUM_SEGMENTS];
+/** Per-segment pixel count, same indexing as hp41_quad_segment_pixel_offset. */
+extern const uint16_t hp41_quad_segment_pixel_count[HP41_QUAD_NUM_SEGMENTS];

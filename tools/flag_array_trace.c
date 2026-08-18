@@ -9,7 +9,7 @@
  * Same technique already used successfully in this project to find the
  * stack registers (0-3), the ALPHA echo register (5), and the ALPHA/
  * SHIFT mode bits (register 14) - see CLAUDE.md's "Elite User Mode"
- * section. This is the Phase 2a diagnostic from the Magellan/DM41X plan
+ * section. This is the Phase 2a diagnostic from the Magellan/QUAD plan
  * (`/Users/jake/.claude/plans/gentle-mapping-dewdrop.md`): FIX/SCI/ENG
  * formatting rules are publicly documented (HP-41C/CV Owner's Handbook),
  * but *where* those mode bits live in this emulator's RAM was unknown

@@ -13,7 +13,7 @@
  *
  * hp41_elite_decode_register() itself is no longer tested here - see
  * register_decode_test.c, extracted alongside the production code's own
- * split into hp41_register_decode.c/h (Phase 3 of the Magellan/DM41X
+ * split into hp41_register_decode.c/h (Phase 3 of the Magellan/QUAD
  * plan). This file stays scoped to the parts that remain: the 144x32
  * framebuffer-compute functions.
  *

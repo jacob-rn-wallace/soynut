@@ -447,7 +447,7 @@ int main(void) {
             dbg("soynut: rendering display state #%d (PC=0x%04X, instr=%d, checksum=0x%02X)\n",
                    render_count, regPC, cptinstr, checksum);
 
-            // TEMPORARY (Phase 0 diagnostic - see the Magellan/DM41X plan):
+            // TEMPORARY (Phase 0 diagnostic - see the Magellan/QUAD plan):
             // decode all four stack registers unconditionally, regardless
             // of elite_mode_active, and print them. This never touches
             // Elite Mode's key-bridge trigger/interception machinery (the

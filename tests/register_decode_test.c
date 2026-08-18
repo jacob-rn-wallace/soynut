@@ -3,7 +3,7 @@
  * @brief Native (host) test for hp41_register_decode.c.
  *
  * Extracted from elite_display_bridge_test.c (Phase 3 of the Magellan/
- * DM41X plan - see CLAUDE.md's "Elite User Mode" section for the
+ * QUAD plan - see CLAUDE.md's "Elite User Mode" section for the
  * register-format provenance this is built on) alongside the production
  * code's own extraction into hp41_register_decode.c/h - this test now
  * covers exactly that module, independent of either display path that

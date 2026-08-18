@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.13)
 # Standalone from ../firmware and ../lcd_bringup on purpose - no Nut CPU
 # core, no ROM, no key bridge. Sole purpose: get anything showing on the
 # physical Sharp Memory LCD over SPI, with correct polarity, and prove
-# out the periodic-refresh idiom the real dm41x/ target will need later.
+# out the periodic-refresh idiom the real quad/ target will need later.
 # See ../CLAUDE.md's "Sharp Memory LCD bring-up" section and main.c.
 
 if (NOT DEFINED ENV{PICO_SDK_PATH} AND NOT PICO_SDK_PATH)
@@ -14,7 +14,7 @@ set(PICO_BOARD pico2 CACHE STRING "Board type")
 
 include(pico_sdk_import.cmake)
 
-project(dm41x_bringup C CXX ASM)
+project(quad_bringup C CXX ASM)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
@@ -27,13 +27,13 @@ pico_sdk_init()
 # edit anything under third_party/, same as ../emu41gcc/.
 set(SHARPDISP_DIR ${CMAKE_CURRENT_LIST_DIR}/third_party/pico_sharpmem_display)
 
-add_executable(dm41x_bringup
+add_executable(quad_bringup
         main.c
         ${SHARPDISP_DIR}/src/sharpdisp.c
         ${SHARPDISP_DIR}/src/bitmap.c
 )
 
-target_include_directories(dm41x_bringup PRIVATE
+target_include_directories(quad_bringup PRIVATE
         ${SHARPDISP_DIR}/include
 )
 
@@ -53,13 +53,13 @@ set_property(SOURCE main.c APPEND PROPERTY COMPILE_OPTIONS
         -Wall -Wextra -Wpedantic -Werror -UNDEBUG
 )
 
-target_link_libraries(dm41x_bringup
+target_link_libraries(quad_bringup
         pico_stdlib
         hardware_gpio
         hardware_spi
 )
 
-pico_enable_stdio_usb(dm41x_bringup 1)
-pico_enable_stdio_uart(dm41x_bringup 0)
+pico_enable_stdio_usb(quad_bringup 1)
+pico_enable_stdio_uart(quad_bringup 0)
 
-pico_add_extra_outputs(dm41x_bringup)
+pico_add_extra_outputs(quad_bringup)

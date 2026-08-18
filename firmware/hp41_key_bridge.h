@@ -53,15 +53,15 @@
  * firmware/main.c, which polls the flag and does the actual reset).
  *
  * "[DSP]" is the same kind of bridge-level command (Phase 3c of the
- * Magellan/DM41X plan - see
+ * Magellan/QUAD plan - see
  * /Users/jake/.claude/plans/gentle-mapping-dewdrop.md): toggles the
- * DM41X-style display's view mode (Stack <-> classic-line - see
- * hp41_dm41x_display_bridge.h). It doesn't correspond to any real HP-41
+ * QUAD-style display's view mode (Stack <-> classic-line - see
+ * hp41_quad_display_bridge.h). It doesn't correspond to any real HP-41
  * key at all (unlike ON/SHIFT/etc above, which are real physical keys
- * with no ASCII equivalent) - the DM41X's own physical DSP key, and the
+ * with no ASCII equivalent) - the QUAD's own physical DSP key, and the
  * planned new button on this project's own hardware, have no real-41C
  * keycode to map to either. Consumed via
- * hp41_key_bridge_dm41x_view_toggle_requested() below, same one-shot
+ * hp41_key_bridge_quad_view_toggle_requested() below, same one-shot
  * semantics as "[CLRMEM]". This software-level command is deliberately
  * all this pass delivers - the real physical button is separate future
  * hardware work, once soynut has an actual key-matrix subsystem (none
@@ -146,7 +146,7 @@ bool hp41_key_bridge_clear_memory_requested(void);
  * @return true if "[DSP]" was received since the last call to this
  *         function (or since hp41_key_bridge_reset()).
  */
-bool hp41_key_bridge_dm41x_view_toggle_requested(void);
+bool hp41_key_bridge_quad_view_toggle_requested(void);
 
 /**
  * @brief Check for, and consume, a pending Elite Mode on/off toggle request.

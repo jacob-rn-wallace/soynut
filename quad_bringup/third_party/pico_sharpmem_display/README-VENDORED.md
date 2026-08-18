@@ -19,5 +19,5 @@ approach whenever a real upstream URL exists):
 
 **Treat this directory as a black box, same hard rule as `emu41gcc/`:
 never edit any file inside it.** If something here needs to change,
-that's a sign the fix belongs in `dm41x_bringup/` (or, later, `dm41x/`)
+that's a sign the fix belongs in `quad_bringup/` (or, later, `quad/`)
 code that calls into it instead.

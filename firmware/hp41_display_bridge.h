@@ -10,7 +10,7 @@
 
 /* hp41_decode_ascii() used to live here - extracted into its own
  * hardware-agnostic module, hp41_ascii_decode.h/.c (Phase 4 of the
- * Magellan/DM41X plan), since the new dm41x/ firmware target's
+ * Magellan/QUAD plan), since the new quad/ firmware target's
  * classic-line view needs the exact same decode without pulling in this
  * file's st7920.h/144x32-font-table dependencies. Re-included here so
  * existing callers of this header don't need to change. */

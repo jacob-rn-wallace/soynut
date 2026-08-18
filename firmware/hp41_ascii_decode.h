@@ -3,9 +3,9 @@
  * @brief Decodes one raw HP-41 display register code to an ASCII character.
  *
  * Extracted out of hp41_display_bridge.c/.h (Phase 4 of the Magellan/
- * DM41X plan - see /Users/jake/.claude/plans/gentle-mapping-dewdrop.md):
- * the new dm41x/ firmware target's classic-line view
- * (hp41_dm41x_display_bridge.c) needs this exact decode too, but linking
+ * QUAD plan - see /Users/jake/.claude/plans/gentle-mapping-dewdrop.md):
+ * the new quad/ firmware target's classic-line view
+ * (hp41_quad_display_bridge.c) needs this exact decode too, but linking
  * the whole of hp41_display_bridge.c to get it would drag in
  * hp41_display_render()'s dependency on st7920.c and the old 144x32
  * font tables - exactly the 144x32-specific coupling this new target is

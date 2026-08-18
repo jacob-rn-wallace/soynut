@@ -1,7 +1,7 @@
 # Power of 10 — deviations
 
 This project's own code (everything except the vendored `emu41gcc/`
-submodule, the vendored `dm41x_bringup/third_party/` files, and the
+submodule, the vendored `quad_bringup/third_party/` files, and the
 external `pico-sdk/` dependency) follows NASA/JPL's "Power of 10" rules
 for safety-critical code:
 
@@ -54,7 +54,7 @@ fixed, not added to this list.
 ## Rule 2 (every loop must have a fixed, provable upper bound)
 
 **Scope of the exception:** the top-level `while (true)` in
-`firmware/main.c`, `lcd_bringup/main.c`, and `dm41x_bringup/main.c`, the Arduino sketches'
+`firmware/main.c`, `lcd_bringup/main.c`, and `quad_bringup/main.c`, the Arduino sketches'
 `loop()` functions (which the Arduino runtime itself calls forever —
 there's no way to "bound" that from inside the sketch), and the
 halt-on-fatal-error `while (true) { tight_loop_contents(); }` inside

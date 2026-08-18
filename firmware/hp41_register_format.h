@@ -5,7 +5,7 @@
  *        mode-aware formatting, not Elite Mode's always-full-mantissa-
  *        plus-exponent shortcut.
  *
- * Phase 3a of the Magellan/DM41X plan
+ * Phase 3a of the Magellan/QUAD plan
  * (/Users/jake/.claude/plans/gentle-mapping-dewdrop.md's Context section
  * has the full reasoning for why this exists as new code rather than
  * reusing ROM microcode): the real HP-41 only ever formats one register
@@ -23,9 +23,9 @@
  * optionally followed by a decimal-point or exponent-separator gap-mark)
  * in the real HP-41's actual 12-column, variable-width layout - not
  * Elite Mode's always-14-fixed-column convention (see
- * font-tables/hp41_dm41x_font_table.h for why). This is deliberately
+ * font-tables/hp41_quad_font_table.h for why). This is deliberately
  * the same shape hp41_display_bridge.c's own per-cell decode already
- * produces for the classic single-line display, so both of the DM41X-
+ * produces for the classic single-line display, so both of the QUAD-
  * style display's view modes (Stack and classic-line) can walk a field
  * sequence and plot through the same table identically.
  */
@@ -37,7 +37,7 @@
 #include "hp41_register_decode.h"
 
 /** Real HP-41 physical character-cell count - see
- *  font-tables/hp41_dm41x_font_table.h's HP41_DM41X_NUM_COLS derivation. */
+ *  font-tables/hp41_quad_font_table.h's HP41_QUAD_NUM_COLS derivation. */
 #define HP41_FORMAT_MAX_FIELDS 12
 
 /** Current calculator display-format mode - mirrors the empirically-confirmed
@@ -73,7 +73,7 @@ typedef enum {
 
 /** One formatted cell, plus any gap-mark riding in the space after it
  *  (matching the real hardware's decimal-point/separator convention -
- *  see font-tables/hp41_dm41x_font_table.h's HP41_DM41X_SEG_DOT/_SEP). */
+ *  see font-tables/hp41_quad_font_table.h's HP41_QUAD_SEG_DOT/_SEP). */
 typedef struct {
     hp41_field_kind_t kind;
     uint8_t digit; /**< 0-9, valid only when kind == HP41_FIELD_DIGIT. */

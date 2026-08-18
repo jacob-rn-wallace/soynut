@@ -17,7 +17,7 @@
 
 /* HP41_ELITE_REG_*, hp41_elite_number_t, and hp41_elite_decode_register()
  * used to live here - extracted into their own hardware/display-agnostic
- * module (Phase 3 of the Magellan/DM41X plan) since the new DM41X-style
+ * module (Phase 3 of the Magellan/QUAD plan) since the new QUAD-style
  * display needs the decode without any of this file's 144x32-specific
  * pixel-plotting code. Re-included here so existing callers of this
  * header don't need to change. */
