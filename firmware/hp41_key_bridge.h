@@ -52,6 +52,21 @@
  * business touching flash or resetting CPU state itself (see
  * firmware/main.c, which polls the flag and does the actual reset).
  *
+ * "[DSP]" is the same kind of bridge-level command (Phase 3c of the
+ * Magellan/DM41X plan - see
+ * /Users/jake/.claude/plans/gentle-mapping-dewdrop.md): toggles the
+ * DM41X-style display's view mode (Stack <-> classic-line - see
+ * hp41_dm41x_display_bridge.h). It doesn't correspond to any real HP-41
+ * key at all (unlike ON/SHIFT/etc above, which are real physical keys
+ * with no ASCII equivalent) - the DM41X's own physical DSP key, and the
+ * planned new button on this project's own hardware, have no real-41C
+ * keycode to map to either. Consumed via
+ * hp41_key_bridge_dm41x_view_toggle_requested() below, same one-shot
+ * semantics as "[CLRMEM]". This software-level command is deliberately
+ * all this pass delivers - the real physical button is separate future
+ * hardware work, once soynut has an actual key-matrix subsystem (none
+ * exists yet; all input today is USB-serial, this included).
+ *
  * Elite User Mode: **currently deactivated by default** (see
  * hp41_key_bridge_set_elite_mode_feature_enabled() below - real, not-
  * yet-diagnosed display bugs found on first real-hardware use), kept
@@ -121,6 +136,17 @@ void hp41_key_bridge_reset(void);
  *         function (or since hp41_key_bridge_reset()).
  */
 bool hp41_key_bridge_clear_memory_requested(void);
+
+/**
+ * @brief Check for, and consume, a pending "[DSP]" view-toggle request.
+ *
+ * One-shot, same semantics as hp41_key_bridge_clear_memory_requested().
+ * See hp41_key_bridge_feed_byte()'s header doc for the full picture.
+ *
+ * @return true if "[DSP]" was received since the last call to this
+ *         function (or since hp41_key_bridge_reset()).
+ */
+bool hp41_key_bridge_dm41x_view_toggle_requested(void);
 
 /**
  * @brief Check for, and consume, a pending Elite Mode on/off toggle request.

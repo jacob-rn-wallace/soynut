@@ -372,9 +372,38 @@ static int test_elite_mode_trigger(void)
     return failures;
 }
 
+#define DSP_VIEW_TOGGLE_CHECK_COUNT 4
+
+/**
+ * @brief Verify "[DSP]" is a bridge-level command (Phase 3c of the
+ *        Magellan/DM41X plan): no real HP-41 keycode pushed, one-shot flag set.
+ * @return Number of failed checks (0 = all pass).
+ */
+static int test_dsp_view_toggle(void)
+{
+    int failures = 0;
+
+    reset();
+    feed_string("[DSP]");
+    failures += !check("[DSP] -> nothing pushed to keybuffer", NULL, 0);
+    failures += !check_bool("  toggle_requested() first call",
+                             hp41_key_bridge_dm41x_view_toggle_requested(), true);
+    failures += !check_bool("  toggle_requested() second call (one-shot)",
+                             hp41_key_bridge_dm41x_view_toggle_requested(), false);
+
+    /* Case-insensitive, same as every other "[NAME]". */
+    reset();
+    feed_string("[dsp]");
+    failures += !check_bool("lowercase '[dsp]' triggers",
+                             hp41_key_bridge_dm41x_view_toggle_requested(), true);
+
+    assert(failures >= 0 && failures <= DSP_VIEW_TOGGLE_CHECK_COUNT);
+    return failures;
+}
+
 #define TOTAL_CHECK_COUNT (DIRECT_ASCII_CHECK_COUNT + NAMED_KEY_CHECK_COUNT \
                            + MALFORMED_CHECK_COUNT + MULTI_KEY_CHECK_COUNT \
-                           + ELITE_MODE_CHECK_COUNT)
+                           + ELITE_MODE_CHECK_COUNT + DSP_VIEW_TOGGLE_CHECK_COUNT)
 
 /**
  * @brief Run all key bridge check groups and report pass/fail.
@@ -386,7 +415,8 @@ int main(void)
                         + test_named_key_protocol()
                         + test_malformed_sequences()
                         + test_multi_key_and_cap()
-                        + test_elite_mode_trigger();
+                        + test_elite_mode_trigger()
+                        + test_dsp_view_toggle();
     assert(failures >= 0);
     assert(failures <= TOTAL_CHECK_COUNT);
 

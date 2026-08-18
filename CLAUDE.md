@@ -843,7 +843,18 @@ Pure logic — `hp41_key_bridge_feed_byte(int c)` is the whole API, plus
   misfiring partial names as raw keypresses.
 - `keybuffer[]`'s 8-slot cap matches `emu41gcc`'s own `push_key()` —
   extra presses beyond 8 pending are silently dropped.
-- Verified via `tests/key_bridge_test.c` (17 checks, including
+- **Bridge-level commands, not real HP-41 keys** — push nothing to
+  `keybuffer[]` at all, just set a one-shot flag main.c polls:
+  `[CLRMEM]` (continuous-memory reset) and, as of Phase 3c of the
+  Magellan/DM41X plan, **`[DSP]`** — toggles the DM41X-style display's
+  view mode (see `hp41_key_bridge_dm41x_view_toggle_requested()`).
+  Mirrors the DM41X's own physical DSP key and this project's own
+  planned new hardware button (between USR/PRGM) — neither has a real
+  HP-41 keycode to map to, since soynut has no physical key-matrix
+  subsystem yet (all input is USB-serial, this included) and the real
+  hardware button is separate future work; this command is exactly what
+  it will end up driving once built.
+- Verified via `tests/key_bridge_test.c` (21 checks, including
   adversarial malformed-bracket input).
 
 ### Press-and-hold — `firmware/hp41_key_hold_bridge.h`/`.c`

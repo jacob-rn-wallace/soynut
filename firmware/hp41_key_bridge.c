@@ -267,6 +267,11 @@ static int name_len = STATE_NORMAL;
  * why this is a one-shot flag rather than an immediate action here. */
 static bool clear_memory_requested = false;
 
+/* Set by "[DSP]" (Phase 3c of the Magellan/DM41X plan), consumed (and
+ * cleared) by hp41_key_bridge_dm41x_view_toggle_requested() - same
+ * one-shot-flag rationale as clear_memory_requested above. */
+static bool dm41x_view_toggle_requested = false;
+
 /**
  * @brief Reset the "[NAME]" escape-sequence state to idle.
  *
@@ -280,6 +285,7 @@ void hp41_key_bridge_reset(void)
 {
     name_len = STATE_NORMAL;
     clear_memory_requested = false;
+    dm41x_view_toggle_requested = false;
     leet_progress = 0;
     elite_mode_toggle_requested = false;
     alpha_row_toggle_requested = false;
@@ -303,6 +309,19 @@ bool hp41_key_bridge_clear_memory_requested(void)
     assert(requested == true || requested == false);
     clear_memory_requested = false;
     assert(clear_memory_requested == false);
+    return requested;
+}
+
+/**
+ * @brief Check for, and consume, a pending "[DSP]" request; see the header.
+ *
+ * @return true if "[DSP]" was received since the last call.
+ */
+bool hp41_key_bridge_dm41x_view_toggle_requested(void)
+{
+    bool requested = dm41x_view_toggle_requested;
+    dm41x_view_toggle_requested = false;
+    assert(dm41x_view_toggle_requested == false);
     return requested;
 }
 
@@ -410,6 +429,11 @@ void hp41_key_bridge_feed_byte(int c)
                  * hp41_key_bridge_clear_memory_requested()'s header doc
                  * for why this only sets a flag rather than acting here. */
                 clear_memory_requested = true;
+            } else if (strcmp(name_buf, "DSP") == 0) {
+                /* Bridge-level command, not a real key - see
+                 * hp41_key_bridge_dm41x_view_toggle_requested()'s header
+                 * doc. Same "just set a flag" rationale as CLRMEM above. */
+                dm41x_view_toggle_requested = true;
             } else if (strcmp(name_buf, "LEET") == 0) {
                 /* Convenience alias for the real XEQ-ALPHA-LEET-ALPHA
                  * key sequence - see hp41_key_bridge.h. */
