@@ -77,6 +77,9 @@ $(BUILD)/hp41_key_hold_bridge.o: $(ROOT)/firmware/hp41_key_hold_bridge.c | $(BUI
 $(BUILD)/hp41_display_bridge.o: $(ROOT)/firmware/hp41_display_bridge.c | $(BUILD)
 	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
 
+$(BUILD)/hp41_ascii_decode.o: $(ROOT)/firmware/hp41_ascii_decode.c | $(BUILD)
+	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
 $(BUILD)/hp41_persist_state.o: $(ROOT)/firmware/hp41_persist_state.c | $(BUILD)
 	$(CC) $(STD) -fcommon $(STRICT) $(INC) -c -o $@ $<
 
@@ -110,8 +113,8 @@ $(BUILD)/nut_smoke_test: $(BUILD)/nut_smoke_test.o $(BUILD)/nutcpu.o $(BUILD)/di
 
 $(BUILD)/display_bridge_test: $(BUILD)/display_bridge_test.o $(BUILD)/nutcpu.o $(BUILD)/display.o \
                                $(BUILD)/nut_stubs.o $(BUILD)/nut_globals.o $(BUILD)/nut_rom.o \
-                               $(BUILD)/hp41_display_bridge.o $(BUILD)/rom_images.o \
-                               $(BUILD)/hp41_display_tables.o
+                               $(BUILD)/hp41_display_bridge.o $(BUILD)/hp41_ascii_decode.o \
+                               $(BUILD)/rom_images.o $(BUILD)/hp41_display_tables.o
 	$(CC) -o $@ $^
 
 $(BUILD)/key_bridge_test: $(BUILD)/key_bridge_test.o $(BUILD)/nut_globals.o \
@@ -164,7 +167,7 @@ $(BUILD)/register_format_test: $(BUILD)/register_format_test.o $(BUILD)/nut_glob
 # storage) plus every module the bridge itself depends on.
 $(BUILD)/dm41x_display_bridge_test: $(BUILD)/dm41x_display_bridge_test.o $(BUILD)/nut_globals.o \
                                      $(BUILD)/display.o $(BUILD)/hp41_dm41x_display_bridge.o \
-                                     $(BUILD)/hp41_display_bridge.o $(BUILD)/hp41_display_tables.o \
+                                     $(BUILD)/hp41_ascii_decode.o \
                                      $(BUILD)/hp41_register_decode.o $(BUILD)/hp41_register_format.o \
                                      $(BUILD)/hp41_dm41x_font_table.o
 	$(CC) -o $@ $^

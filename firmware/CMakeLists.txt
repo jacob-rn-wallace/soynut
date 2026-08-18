@@ -34,6 +34,7 @@ add_executable(soynut
         bitmaps.c
         hp41_display_bridge.c
         hp41_elite_display_bridge.c
+        hp41_ascii_decode.c
         hp41_register_decode.c
         hp41_key_bridge.c
         hp41_key_hold_bridge.c
@@ -109,6 +110,7 @@ set(SOYNUT_OWN_SOURCES
         bitmaps.c
         hp41_display_bridge.c
         hp41_elite_display_bridge.c
+        hp41_ascii_decode.c
         hp41_register_decode.c
         hp41_key_bridge.c
         hp41_key_hold_bridge.c

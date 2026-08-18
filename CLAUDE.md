@@ -760,11 +760,17 @@ for why that's the opposite of `hp41_display_bridge.h`'s polarity).
   necessarily agree), and one shared path is simpler than two.
 - **`HP41_DM41X_VIEW_CLASSIC_LINE`**: the exact same `lcd_a/b/c/lcd_ann`
   decode `hp41_display_bridge.c`'s own `hp41_display_compute_framebuffer()`
-  already does (down to reusing its now-non-`static` `hp41_decode_ascii()`
-  directly, rather than a third duplicate copy — `tools/powoff_trace.c`
-  already has one, kept for its own cross-build-system reason), just
-  plotted through the DM41X font table's bigger cells. Period/colon/comma
-  punctuation map onto `HP41_DM41X_SEG_DOT`/`_COLON`/`_SEP` respectively —
+  already does, down to calling the exact same `hp41_decode_ascii()` -
+  which (Phase 4) now lives in its own tiny module,
+  `firmware/hp41_ascii_decode.h`/`.c`, extracted out of
+  `hp41_display_bridge.c` for the same reason `hp41_register_decode.h`/
+  `.c` was: linking the whole of `hp41_display_bridge.c` would drag
+  `hp41_display_render()`'s `st7920.c`/144x32-font-table dependencies
+  into the new `dm41x/` target for no reason. Not a third duplicate copy
+  either way — `tools/powoff_trace.c` has its own, kept for its own
+  cross-build-system reason. Just plotted through the DM41X font table's
+  bigger cells here. Period/colon/comma punctuation map onto
+  `HP41_DM41X_SEG_DOT`/`_COLON`/`_SEP` respectively —
   note comma is a *single* combined mark here (rasterized from Magellan's
   own dot+tail `COMMA` polygon), unlike the original 144x32 table's
   `dot_bottom`+`comma_tail` pair.

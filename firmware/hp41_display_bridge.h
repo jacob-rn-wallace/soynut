@@ -8,22 +8,13 @@
 
 #include <stdint.h>
 
-/**
- * @brief Decode one HP-41 raw display register code to an ASCII character.
- *
- * Re-derived from emu41gcc/display.c's static alpha41() - see
- * hp41_display_bridge.c's own implementation comment for why. No longer
- * `static`: hp41_dm41x_display_bridge.c's classic-line view (Phase 3b of
- * the Magellan/DM41X plan) needs the exact same decode, and duplicating
- * this specific function a third time (tools/powoff_trace.c already
- * duplicates it once, for a cross-build-system reason that doesn't apply
- * here - both callers live in firmware/'s own build) isn't worth it.
- *
- * @param v Raw HP-41 display code for one cell:
- *          (lcd_c[i]<<8) | ((lcd_b[i]&3)<<4) | lcd_a[i].
- * @return The decoded ASCII character code (0-127).
- */
-int hp41_decode_ascii(int v);
+/* hp41_decode_ascii() used to live here - extracted into its own
+ * hardware-agnostic module, hp41_ascii_decode.h/.c (Phase 4 of the
+ * Magellan/DM41X plan), since the new dm41x/ firmware target's
+ * classic-line view needs the exact same decode without pulling in this
+ * file's st7920.h/144x32-font-table dependencies. Re-included here so
+ * existing callers of this header don't need to change. */
+#include "hp41_ascii_decode.h"
 
 /**
  * @brief Decode the emulator's display state into an ST7920 framebuffer.

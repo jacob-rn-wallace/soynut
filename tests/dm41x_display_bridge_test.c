@@ -27,19 +27,6 @@ extern unsigned char lcd_b[12];
 extern unsigned char lcd_c[12];
 extern int lcd_ann;
 
-/**
- * @brief No-op stand-in for firmware/st7920.c's real GPIO driver.
- *
- * The classic-line view links the whole of hp41_display_bridge.o to
- * reuse hp41_decode_ascii() - that pulls in hp41_display_render(), which
- * calls st7920_draw_frame() (real GPIO/ST7920 code, Pico-only). This
- * test never calls hp41_display_render(), but the linker still needs
- * the symbol resolved - same stub, same reasoning as display_bridge_test.c's.
- *
- * @param fb Ignored.
- */
-void st7920_draw_frame(const uint8_t *fb) { (void)fb; }
-
 /** Empirically-confirmed espaceRAM offsets for display-format state (see
  *  CLAUDE.md's "Display-format state" section) - poked directly here,
  *  same spirit as write_register() below poking the stack registers. */

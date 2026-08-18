@@ -9,7 +9,7 @@
 #include <assert.h>
 #include <string.h>
 
-#include "hp41_display_bridge.h" /* hp41_decode_ascii() - see that header's own comment */
+#include "hp41_ascii_decode.h"
 #include "hp41_register_decode.h"
 #include "hp41_register_format.h"
 

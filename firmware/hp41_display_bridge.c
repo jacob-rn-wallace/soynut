@@ -15,6 +15,7 @@
 
 #include "st7920.h"
 #include "hp41_display_tables.h"
+#include "hp41_ascii_decode.h"
 
 /* lcd_a/b/c/lcd_ann are plain globals in emu41gcc/display.c with no
  * header exposing them (display.h only declares functions) - declared
@@ -26,59 +27,6 @@ extern unsigned char lcd_a[HP41_NUM_CELLS];
 extern unsigned char lcd_b[HP41_NUM_CELLS];
 extern unsigned char lcd_c[HP41_NUM_CELLS];
 extern int lcd_ann;
-
-/**
- * @brief Decode one HP-41 raw display register code to an ASCII character.
- *
- * See hp41_display_bridge.h for the public contract (no longer `static`
- * as of Phase 3b of the Magellan/DM41X plan - hp41_dm41x_display_bridge.c
- * needs it too). Same raw-code-to-ASCII decode as emu41gcc/display.c's
- * static alpha41() - reimplemented here (rather than exposing that
- * static function, which would mean touching the vendored file) because
- * this exact decode is what's already validated correct: it's what
- * produced "MEMORY LOST" via display_to_buf() in the first Nut CPU boot
- * test (see CLAUDE.md, tests/nut_smoke_test.c).
- */
-int hp41_decode_ascii(int v)
-{
-    v &= 0x13f;
-    assert(v >= 0 && v <= 0x13f);
-
-    int result;
-    if (v <= 0x1f) {
-        result = v + '@';
-    } else if (v <= 0x3f) {
-        if (v == 0x2c)      result = '<';  /* backward flying goose */
-        else if (v == 0x2e) result = '>';  /* flying goose */
-        else if (v == 0x3a) result = '*';  /* starburst */
-        else                result = v;
-    } else if (v <= 0x105) {
-        result = v - 0xa0;
-    } else if (v <= 0x11f) {
-        switch (v) {
-            case 0x106: result = '~';  break; /* top bar */
-            case 0x107: result = '\''; break; /* append */
-            case 0x10c: result = 'u';  break; /* micro */
-            case 0x10d: result = '#';  break; /* different sign */
-            case 0x10e: result = 's';  break; /* sigma */
-            case 0x10f: result = 'a';  break; /* angle */
-            default:    result = 'x';  break; /* non-displayable */
-        }
-    } else {
-        result = v - 0x120 + 'a' - 1;
-    }
-
-    /* Guards the assumption every caller relies on: the result is used
-     * directly as an index into hp41_char_segments[128] (after a caller-
-     * side & 0x7f). This function's input domain is sparse in practice
-     * (only combinations the real ROM's display registers actually
-     * produce), not the full 0-0x13f range the mask above allows - if a
-     * future code path ever fed something outside that sparse set, the
-     * v-0xa0 branch above could go negative, and a negative index into
-     * that table is undefined behavior. Catch it here instead. */
-    assert(result >= 0);
-    return result;
-}
 
 /**
  * @brief Set one pixel in a 1bpp, row-major, MSB-first framebuffer.
