@@ -127,8 +127,8 @@ static int test_numeric_framebuffer(void)
 {
     int failures = 0;
     uint8_t fb[LCD_FB_SIZE];
-    const unsigned char pos[7] = {0x40, 0x00, 0x89, 0x67, 0x45, 0x23, 0x01};
-    const unsigned char neg[7] = {0x49, 0x00, 0x89, 0x67, 0x45, 0x23, 0x91};
+    const unsigned char pos[7] = {0x04, 0x00, 0x89, 0x67, 0x45, 0x23, 0x01};
+    const unsigned char neg[7] = {0x04, 0x09, 0x89, 0x67, 0x45, 0x23, 0x91};
 
     reset_registers();
     hp41_elite_display_compute_framebuffer(fb);
@@ -208,7 +208,7 @@ static int test_alpha_row(void)
      * byte1='B', byte2='A', rest 0 (unused/oldest slots). */
     reset_registers();
     const unsigned char abc[7] = {'C', 'B', 'A', 0, 0, 0, 0};
-    write_register(HP41_ELITE_REG_T, (const unsigned char[7]){0x40, 0x00, 0x89, 0x67, 0x45, 0x23, 0x01});
+    write_register(HP41_ELITE_REG_T, (const unsigned char[7]){0x04, 0x00, 0x89, 0x67, 0x45, 0x23, 0x01});
     espaceRAM[5 * 8] = 0;
     memcpy(&espaceRAM[5 * 8 + 1], abc, 7);
 

@@ -190,7 +190,7 @@ static int test_stack_view(void)
 
     /* Mantissa 1234567890, exponent 04, positive - same worked example
      * register_format_test.c and register_decode_test.c both use. */
-    const unsigned char pos[7] = {0x40, 0x00, 0x89, 0x67, 0x45, 0x23, 0x01};
+    const unsigned char pos[7] = {0x04, 0x00, 0x89, 0x67, 0x45, 0x23, 0x01};
 
     reset_state();
     write_register(HP41_ELITE_REG_X, pos);

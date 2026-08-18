@@ -39,9 +39,9 @@ void hp41_elite_decode_register(int stack_index, hp41_elite_number_t *out)
     for (int i = 0; i < 14; i++)
         assert(nibble[i] <= 9);
 
-    out->exponent_negative = (nibble[0] == 9);
-    out->exponent_tens = nibble[2];
-    out->exponent_units = nibble[1];
+    out->exponent_units = nibble[0];
+    out->exponent_tens = nibble[1];
+    out->exponent_negative = (nibble[2] == 9);
     out->mantissa_negative = (nibble[13] == 9);
     for (int k = 1; k <= 10; k++)
         out->mantissa_digits[k - 1] = nibble[13 - k];

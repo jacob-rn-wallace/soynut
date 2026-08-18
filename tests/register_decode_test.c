@@ -81,9 +81,10 @@ static int test_decode_register(void)
         failures += !check_int("all-zero: mantissa digit", n.mantissa_digits[i], 0);
 
     /* Mantissa 1234567890 (digit[0]=1 leading .. digit[9]=0 trailing),
-     * exponent 04, both positive - see nibble derivation in the commit
-     * that added this test / CLAUDE.md's worked example. */
-    const unsigned char pos[7] = {0x40, 0x00, 0x89, 0x67, 0x45, 0x23, 0x01};
+     * exponent 04, both positive - nibble order (units, tens, sign)
+     * confirmed against real ROM-computed values, see CLAUDE.md's
+     * "Elite User Mode" section. */
+    const unsigned char pos[7] = {0x04, 0x00, 0x89, 0x67, 0x45, 0x23, 0x01};
     write_register(HP41_ELITE_REG_X, pos);
     hp41_elite_decode_register(HP41_ELITE_REG_X, &n);
     failures += !check_int("positive: mantissa_negative", n.mantissa_negative, false);
@@ -95,7 +96,7 @@ static int test_decode_register(void)
         failures += !check_int("positive: mantissa digit", n.mantissa_digits[i], want_digits[i]);
 
     /* Same digits, both signs negative. */
-    const unsigned char neg[7] = {0x49, 0x00, 0x89, 0x67, 0x45, 0x23, 0x91};
+    const unsigned char neg[7] = {0x04, 0x09, 0x89, 0x67, 0x45, 0x23, 0x91};
     write_register(HP41_ELITE_REG_X, neg);
     hp41_elite_decode_register(HP41_ELITE_REG_X, &n);
     failures += !check_int("negative: mantissa_negative", n.mantissa_negative, true);

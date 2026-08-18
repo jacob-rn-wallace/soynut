@@ -46,8 +46,8 @@ typedef struct {
  *
  * Pure logic, no hardware access - safe to call/test on a host build.
  * See CLAUDE.md for the confirmed register format (14 packed BCD
- * nibbles: exponent sign, 2 exponent digits, 10 mantissa digits,
- * mantissa sign).
+ * nibbles, least-significant first: 2 exponent digits (units then
+ * tens), exponent sign, 10 mantissa digits, mantissa sign).
  *
  * @param stack_index One of the HP41_ELITE_REG_* values above.
  * @param out         Decoded fields, fully overwritten.

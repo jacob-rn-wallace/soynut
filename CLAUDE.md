@@ -1131,13 +1131,31 @@ sequences through it, and diffs `espaceRAM` before/after each keystroke:
   with `nutcpu.h`'s unrelated `regM`/`regN` CPU scratch registers, not a
   connection). Each register is 8 bytes: byte 0 is a write-protect flag
   (always 0 in practice for the stack), bytes 1-7 pack the same 14-nibble
-  BCD format the CPU already uses for arithmetic (confirmed from
-  `recallData()`'s unpack loop and `exec2()`'s field-selector table):
-  nibble 0 = exponent sign (0=positive/9=negative), nibbles 1-2 =
-  exponent digits (nibble 1 = units, nibble 2 = tens), nibbles 3-12 =
-  10 mantissa digits (nibble 3 = least significant/last-typed digit,
-  nibble 12 = most significant/leading digit), nibble 13 = mantissa
-  sign. No formatter for this exists anywhere in `emu41gcc` — the
+  BCD format the CPU already uses for arithmetic. The nibble layout
+  actually used by `hp41_elite_decode_register()` (`firmware/
+  hp41_register_decode.c`) is: nibble 0 = exponent units, nibble 1 =
+  exponent tens, nibble 2 = exponent sign (0=positive/9=negative),
+  nibbles 3-12 = 10 mantissa digits (nibble 3 = least significant/
+  last-typed digit, nibble 12 = most significant/leading digit),
+  nibble 13 = mantissa sign. **Correction, found the hard way**: an
+  earlier version of this section (and of `hp41_elite_decode_register()`
+  itself) had the exponent nibbles backwards — sign at nibble 0, units
+  at nibble 1, tens at nibble 2 — reverse-engineered from reading
+  `recallData()`/`exec2()` statically, never checked against a real
+  ROM-computed value (only against synthetic byte patterns that were
+  themselves hand-built to match the same wrong assumption, so the
+  existing host tests couldn't catch it). This is very likely the same
+  underlying defect behind the "Elite grid always showing all zeros"
+  bug noted below — not confirmed on that specific (NHD14432) hardware
+  yet, but the exact same decode function is shared by both display
+  paths. Caught by driving real arithmetic (`123 ENTER 456 +`, and
+  `999999999 ENTER *` to force a 2-digit exponent) through the new
+  `quad/` firmware's live ROM and comparing the decoded fields against
+  the actual physical display and hand-computed expected values —
+  `579` was decoding as exponent 0 (displaying as `5.7900` instead of
+  `579.0000`), and `999999999^2` (true exponent 17) was decoding as
+  exponent 1. Both match exactly once the nibble order above is used
+  instead. No formatter for this exists anywhere in `emu41gcc` — the
   decode in `hp41_elite_decode_register()` is new code, now living in
   its own hardware/display-agnostic module,
   `firmware/hp41_register_decode.h`/`.c` (extracted out of this file in
