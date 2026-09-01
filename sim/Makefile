@@ -35,7 +35,7 @@ BUILD := build
 
 STD := -std=gnu11
 STRICT := -Wall -Wextra -Wpedantic -Werror -UNDEBUG
-INC := -I$(ROOT)/emu41gcc -I$(ROOT)/firmware/emu41gcc_compat -I$(ROOT)/firmware -I$(ROOT)/font-tables
+INC := -I$(ROOT)/emu41gcc -I$(ROOT)/firmware/emu41gcc_compat -I$(ROOT)/firmware -I$(ROOT)/font-tables -I$(ROOT)/ilvideo-native/core
 NUT_STUBS_INC := -include $(ROOT)/firmware/emu41gcc_compat/nut_stubs.h
 
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2)
@@ -96,6 +96,31 @@ $(BUILD)/hp41_elite_display_bridge.o: $(ROOT)/firmware/hp41_elite_display_bridge
 $(BUILD)/hp41_persist_state.o: $(ROOT)/firmware/hp41_persist_state.c | $(BUILD)
 	$(CC) $(STD) -fcommon $(STRICT) $(INC) -c -o $@ $<
 
+$(BUILD)/hp41_ascii_decode.o: $(ROOT)/firmware/hp41_ascii_decode.c | $(BUILD)
+	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
+$(BUILD)/hp41_register_decode.o: $(ROOT)/firmware/hp41_register_decode.c | $(BUILD)
+	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
+$(BUILD)/hp41_hpil_controller.o: $(ROOT)/firmware/hp41_hpil_controller.c | $(BUILD)
+	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
+$(BUILD)/hp41_hpil_video_bridge.o: $(ROOT)/firmware/hp41_hpil_video_bridge.c | $(BUILD)
+	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
+# --- ilvideo-native (git submodule, ../ilvideo-native/ - a separate
+# repo, see its own README) core/: not ours, compiled leniently, same
+# reasoning as the vendored/generated sources above. ---
+
+$(BUILD)/hpil_device.o: $(ROOT)/ilvideo-native/core/hpil_device.c | $(BUILD)
+	$(CC) $(STD) $(INC) -c -o $@ $<
+
+$(BUILD)/ilvideo_term.o: $(ROOT)/ilvideo-native/core/ilvideo_term.c | $(BUILD)
+	$(CC) $(STD) $(INC) -c -o $@ $<
+
+$(BUILD)/ilvideo_device.o: $(ROOT)/ilvideo-native/core/ilvideo_device.c | $(BUILD)
+	$(CC) $(STD) $(INC) -c -o $@ $<
+
 # --- This directory's own sources: strict warnings + SDL2 where needed.
 # sim_main.o needs -fcommon for the same reason firmware/main.c does
 # (see firmware/CMakeLists.txt) - both include nutcpu.h. ---
@@ -126,7 +151,10 @@ $(BUILD)/soynut_sim: $(BUILD)/sim_main.o $(BUILD)/sim_display.o $(BUILD)/sim_per
                       $(BUILD)/nut_stubs.o $(BUILD)/nut_globals.o $(BUILD)/nut_rom.o \
                       $(BUILD)/hp41_key_bridge.o $(BUILD)/hp41_key_hold_bridge.o \
                       $(BUILD)/hp41_display_bridge.o $(BUILD)/hp41_elite_display_bridge.o \
+                      $(BUILD)/hp41_ascii_decode.o $(BUILD)/hp41_register_decode.o \
                       $(BUILD)/hp41_persist_state.o \
+                      $(BUILD)/hp41_hpil_controller.o $(BUILD)/hp41_hpil_video_bridge.o \
+                      $(BUILD)/hpil_device.o $(BUILD)/ilvideo_term.o $(BUILD)/ilvideo_device.o \
                       $(BUILD)/rom_images.o $(BUILD)/hp41_display_tables.o $(BUILD)/hp41_elite_font_table.o
 	$(CC) -o $@ $^ $(SDL_LIBS)
 
