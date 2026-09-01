@@ -1,3 +1,6 @@
 [submodule "emu41gcc"]
 	path = emu41gcc
 	url = https://github.com/mmoller2k/emu41gcc.git
+[submodule "ilvideo-native"]
+	path = ilvideo-native
+	url = https://github.com/jacob-rn-wallace/ilvideo-native.git

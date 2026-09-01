@@ -32,6 +32,8 @@
 #include "hp41_arduino_bridge.h"
 #include "hp41_persist_state.h"
 #include "hp41_persist_flash.h"
+#include "hp41_hpil_controller.h"
+#include "hp41_hpil_video_bridge.h"
 
 #define GLOBAL extern
 #include "nutcpu.h"
@@ -186,6 +188,16 @@ int main(void) {
     dbg("soynut: nut_boot()...\n");
     nut_boot();
     assert(regPC == 0); /* nut_boot()'s documented cold-start value */
+
+    // Real HP-IL controller state (hp41_hpil_controller.h) plus the one
+    // peripheral currently wired onto the loop, the video interface
+    // (hp41_hpil_video_bridge.h) - see both headers' own comments for
+    // the full contract. Reset alongside every other cold-start default
+    // above, matching the reference emulator's own init_hpil() call
+    // site (right after ROM/module loading, before the CPU ever runs).
+    dbg("soynut: hp41_hpil_controller_init()...\n");
+    hp41_hpil_controller_init();
+    hp41_hpil_video_bridge_init();
 
     // Real HP-41 hardware halts the CPU clock entirely after POWOFF and
     // only resumes it via a hardware keyboard-scan interrupt, which

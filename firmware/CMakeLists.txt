@@ -28,6 +28,15 @@ set(EMU41GCC_DIR ${CMAKE_CURRENT_LIST_DIR}/../emu41gcc)
 set(ROMS_DIR ${CMAKE_CURRENT_LIST_DIR}/../roms)
 set(FONT_TABLES_DIR ${CMAKE_CURRENT_LIST_DIR}/../font-tables)
 
+# ilvideo-native (git submodule, ../ilvideo-native - a separate repo,
+# see its own README) provides the HP-82163A Video Interface's HP-IL
+# device + terminal logic that hp41_hpil_video_bridge.c wires onto the
+# real HP-IL controller below. Only core/ is needed here (pure logic,
+# no I/O) - font/ isn't linked in yet since nothing renders the video
+# interface's screen to real hardware yet, see CLAUDE.md's "HP-IL video
+# interface" section for the current status.
+set(ILVIDEO_NATIVE_DIR ${CMAKE_CURRENT_LIST_DIR}/../ilvideo-native)
+
 add_executable(soynut
         main.c
         st7920.c
@@ -41,6 +50,8 @@ add_executable(soynut
         hp41_arduino_bridge.c
         hp41_persist_state.c
         hp41_persist_flash.c
+        hp41_hpil_controller.c
+        hp41_hpil_video_bridge.c
         ${EMU41GCC_DIR}/nutcpu.c
         ${EMU41GCC_DIR}/display.c
         emu41gcc_compat/nut_stubs.c
@@ -49,12 +60,16 @@ add_executable(soynut
         ${ROMS_DIR}/rom_images.c
         ${FONT_TABLES_DIR}/hp41_display_tables.c
         ${FONT_TABLES_DIR}/hp41_elite_font_table.c
+        ${ILVIDEO_NATIVE_DIR}/core/hpil_device.c
+        ${ILVIDEO_NATIVE_DIR}/core/ilvideo_term.c
+        ${ILVIDEO_NATIVE_DIR}/core/ilvideo_device.c
 )
 
 target_include_directories(soynut PRIVATE
         emu41gcc_compat
         ${EMU41GCC_DIR}
         ${FONT_TABLES_DIR}
+        ${ILVIDEO_NATIVE_DIR}/core
 )
 
 # nutcpu.h defines tabpage[16]/tabbank[16][4] as plain (non-extern) globals,
@@ -117,6 +132,8 @@ set(SOYNUT_OWN_SOURCES
         hp41_arduino_bridge.c
         hp41_persist_state.c
         hp41_persist_flash.c
+        hp41_hpil_controller.c
+        hp41_hpil_video_bridge.c
         emu41gcc_compat/nut_stubs.c
         emu41gcc_compat/nut_globals.c
         emu41gcc_compat/nut_rom.c

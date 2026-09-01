@@ -399,6 +399,9 @@ which is a deliberate, visible, separate action.
 
 **Cloning this repo:** `git clone --recurse-submodules <this repo's URL>`
 (or, if already cloned without that flag: `git submodule update --init`).
+This also fetches `ilvideo-native/` (see "HP-IL video interface"
+below) — a second, unrelated submodule, not part of the Nut CPU core
+itself, but pulled in by the same flag/command.
 
 **Hard rule: `emu41gcc/` is a black box. Never edit any file inside it**
 — not a one-line fix, not a portability shim. All build-compatibility
@@ -418,6 +421,23 @@ terms; this project's own code is licensed GPL-2.0-or-later to match
 exactly (see `LICENSE` at the repo root) rather than leave any
 compatibility ambiguity.
 
+**Effective ceiling as of the HP-IL video interface (see that section
+below):** `ilvideo-native/` (a separate repo, submoduled below) is
+itself GPL-2.0-**only** — its own upstream, ILVideo v1.41, grants no
+"or later" clause, so neither can a derivative work of it. `firmware/`
+now statically links `ilvideo-native/core/`'s object code into the same
+`soynut` binary as `emu41gcc`'s GPL-2.0-or-later code. Combining a
+GPL-2.0-only component with GPL-2.0-or-later components means the
+*combined* work can only be distributed under GPL-2.0 proper — the
+"or later" option this project's own code otherwise grants isn't
+actually exercisable for the built `soynut` firmware image as long as
+`ilvideo-native/` stays linked in, per ordinary GPL license-combining
+rules (see the FSF's own GPL FAQ, "using GPLv2 code with GPLv3 code" /
+the GPLv2-only-and-GPLv2-or-later case it generalizes from). This
+doesn't change this project's own `LICENSE` file or its own code's
+grant — only what the *combined, distributed firmware binary*'s
+effective terms are while this dependency is present.
+
 **Key structures** (`nutcpu.h`): `tabpage[16]` (ROM page pointers),
 `typmod[16]` (module type per page, 1=ROM), `espaceRAM[8200]`
 (calculator RAM), registers (`regA/B/C/M/N[14]`, `regPC`, `regST`, etc.),
@@ -432,9 +452,11 @@ jump/call), `exec2()` (register/arithmetic — field-selector + ~30 ops;
 add/subtract branch decimal-vs-hex via `flagdec`, the real mechanism
 behind the HP-41's decimal/hex modes), or `exec3()` (single-word
 relative branch) — or `execp()` instead if a prior `SELPF` set
-`smartp=1` (HP-IL/HP82143-printer peripheral dispatch; not needed for
-base HP-41CV bring-up, but its call signatures pin down the stub
-functions below).
+`smartp=1` (HP-IL/HP82143-printer peripheral dispatch). HP-IL is real
+now — see "HP-IL video interface" below; the HP82143 printer functions
+(`print_char`/`get_printer_status`/`test_printer_flag`) remain the
+same no-op stubs they always were, not needed for base HP-41CV
+bring-up but still pinned down by `execp()`'s own call signatures.
 
 **Important:** `nutcpu.c` has two `executeNUT()` definitions gated on
 `#ifdef VERS_ASM`. **Never define `VERS_ASM`** when building for the
@@ -1077,6 +1099,212 @@ checksum, confirmed across two independent reset cycles, and
 state) — see "Known unknowns" for the full results and one caveat found
 along the way (reflashing the firmware, as opposed to a plain reset or
 power cycle, currently wipes the persisted region).
+
+## HP-IL video interface — `firmware/hp41_hpil_controller.h`/`.c`, `firmware/hp41_hpil_video_bridge.h`/`.c`, `ilvideo-native/`
+
+**Status: real HP-IL protocol logic wired in and host-verified
+end-to-end (21 checks, all passing, plus every pre-existing native test
+still passing with the real logic linked in instead of the old no-op
+stubs), and confirmed to cross-compile cleanly into the real ARM
+firmware image with zero warnings under this project's own strict
+flags. Not yet confirmed against real hardware or a real HP-41 ROM's
+actual HP-IL driver behavior** — see "What's unconfirmed" below before
+relying on this for anything beyond what's already tested.
+
+This gives soynut a second physical display: an HP-82163A Video
+Interface (32-column x 16-row character display, historically an HP-IL
+peripheral) running *inside the same firmware image* as the Nut CPU
+emulator and the existing NHD14432 display — not a second Pico, not a
+network link. `firmware/hp41_hpil_controller.c` implements the real
+1LB3 HP-IL chip register protocol emu41gcc/nutcpu.c's `execp()` and its
+standalone `HPIL=C n` opcode call into (`init_hpil()`/`hpil_wr()`/
+`hpil_rd()`, declared in the vendored `emu41gcc/hpil.h` and previously
+just no-op stubs in `emu41gcc_compat/nut_stubs.c` — see that file's own
+updated header comment). `firmware/hp41_hpil_video_bridge.c` is the
+other half: it owns the one HP-IL peripheral currently wired onto the
+loop (the video interface itself, via the `ilvideo-native/` submodule
+below) and is what the controller actually hands transmitted frames to.
+
+**Why no threading/multicore/network link was needed.** Investigated
+directly from `emu41gcc/nutcpu.c`/`emu41gcc/hpil.h` before writing any
+of this: real HP-IL frame transmission in the Nut CPU has no timing
+model of its own at all. Writing HP-IL chip register 2 (the data
+register) synchronously builds an 11-bit frame and calls
+`hpil_transmit()`-equivalent logic, which walks whatever's on the
+loop and returns an answer in the same call stack — no interrupts, no
+timers, nothing async. The ROM discovers HP-IL state changes purely by
+polling `regFI` (`nutcpu.h`'s "input flags" register) via the `?Fx=1`
+opcode. This meant the video interface device could be wired in as a
+single direct function call
+(`hp41_hpil_loop_transmit()`, declared in `hp41_hpil_controller.h`,
+defined in `hp41_hpil_video_bridge.c`) rather than needing RP2350
+dual-core + FIFO plumbing or any other cross-task coordination — one
+call stack, exactly like the reference emulator's own single-threaded
+DOS-era design.
+
+### `ilvideo-native/` — a separate repo, git submodule
+
+A companion project
+(`https://github.com/jacob-rn-wallace/ilvideo-native`), pinned as a git
+submodule the same way `emu41gcc/` is (see "Cloning this repo" above) —
+**deliberately decoupled from soynut at the source level**: it has no
+knowledge of emu41gcc, the Nut CPU, or this repo's own conventions, and
+soynut is the one reaching into *it*, not the other way around. It's a
+native (no Wine) port of **ILVideo v1.41** (Christoph Giesselink /
+J-F Garnier, GPL-2.0, `hp.giesselink.com/hpil.htm`) — the original
+Windows tool that simulates this exact HP-82163A Video Interface. See
+that repo's own `README.md` and `upstream/README-VENDORED.md` for the
+full provenance chain (what was ported bit-for-bit, what was
+reimplemented, what was dropped entirely) — not re-derived here.
+
+Only `ilvideo-native/core/` is used by soynut today (`hpil_device.c` —
+the generic HP-IL device addressing/listen/talk state machine —
+`ilvideo_term.c` — the video interface's 32x16 character grid, 31-row
+scrollback ring, cursor handling, and ESC-sequence protocol — and
+`ilvideo_device.c`, which composes the two). It's pure C with no I/O
+and no platform dependency, wired into `firmware/CMakeLists.txt`'s
+`add_executable(soynut ...)` sources directly (not a separate library
+target) and into `tests/Makefile` the same lenient way vendored/
+generated sources are handled elsewhere in this project (host-native
+tests treat it as "not ours," full warnings not required, same as
+`emu41gcc/*.c`). `ilvideo-native/font/` and its two frontends
+(`macos/`, a standalone SDL2 program; a still-unbuilt Pico + Sharp
+Memory LCD frontend) are **not** used by soynut — those exist in that
+repo for its own independent macOS/Pico targets, unrelated to this
+integration. Rendering the video interface's screen to soynut's own
+physical Sharp Memory LCD hardware is still ahead of where this
+integration currently stands — see "What's ahead" below.
+
+**Licensing implication of this dependency** — see the "Nut CPU core"
+section's own "Effective ceiling" note above: `ilvideo-native/` is
+GPL-2.0-only, which caps the combined `soynut` firmware binary's
+effective distribution terms at GPL-2.0 (not "or later") for as long as
+it's linked in.
+
+### `hp41_hpil_controller.c` — the real 1LB3 chip simulation
+
+Ported from emu41gcc's own (upstream, **excluded from this build** — it
+lives under `emu41gcc/ignore/`, never compiled here or by upstream's
+own default build either) reference implementation,
+`emu41gcc/ignore/hpil.c`, for the register-level protocol logic
+bit-for-bit — only the C shape changed, not the protocol:
+
+- **No `goto`** (Power of 10 Rule 1): the reference's DOE-frame
+  auto-retransmit ("nobody's listening or talking yet, resend the same
+  frame") is `goto xfer;` there. Here it's a bounded `for` loop
+  (`HP41_HPIL_MAX_DOE_RETRANSMITS`, currently 8) instead.
+- Doxygen headers + named bit constants (`HPIL_STATUS1_ORAV` etc.)
+  replace the reference's terse inline-literal style, matching this
+  project's own commenting standard.
+- `hpil_transmit()`'s general device-table walk (`tabdev[]`/`nbdev`,
+  declared in `nutcpu.h` but never populated by anything in this
+  project) is replaced by the single fixed
+  `hp41_hpil_loop_transmit()` call described above — soynut only wires
+  exactly one HP-IL peripheral today. If a second one is ever added,
+  that's the one function this project would need to teach to walk a
+  real chain instead.
+
+Owns `hpil.h`'s `GLOBAL`-declared storage (`hpil_reg[10]`, `flgenb`) —
+moved here from `nut_stubs.c`, which no longer includes `hpil.h` with
+`GLOBAL` defined at all (see that file's own updated header comment).
+No `-fcommon` is needed for this file: exactly one translation unit
+now instantiates real storage for `hpil.h`'s globals (`nutcpu.c` only
+ever includes it with `GLOBAL` as `extern`), unlike `tabpage[]`/
+`tabbank[]`'s genuine multi-TU common-symbol situation elsewhere in
+this project.
+
+### `hp41_hpil_video_bridge.c` — the one device on the loop
+
+Owns a single static `ilvideo_device_t` (Accessory ID 48, matching
+upstream `CVid32Dev`'s own choice) and exposes it to the rest of the
+firmware through four small functions: `_init()`, `_is_dirty()`/
+`_clear_dirty()` (thin wrappers over the owned `ilvideo_term_t`'s own
+`dirty` flag, for a future render loop to poll), and `_char_at(x, y)`
+(reads the 32x16 grid for rendering). `hp41_hpil_loop_transmit()` —
+the function `hp41_hpil_controller.c` calls on every register-2
+write — is defined here as a single call into
+`ilvideo_device_process_frame()`.
+
+### Wiring into `main.c`
+
+`hp41_hpil_controller_init()` and `hp41_hpil_video_bridge_init()` are
+called right after `nut_boot()` in the cold-start sequence, mirroring
+the reference emulator's own `init_hpil()` call site (right after ROM/
+module loading, before the CPU ever runs) — not yet reset on
+`[CLRMEM]` or master-clear the way `nut_boot()`'s own state is, since
+HP-IL state isn't part of `hp41_persist_state_t` either (ephemeral,
+like `regPC`/`flagKey`/etc. — see "Continuous memory" above for why
+those are deliberately excluded from persistence too). Nothing yet
+polls `hp41_hpil_video_bridge_is_dirty()`/renders its screen to real
+hardware — see "What's ahead" below.
+
+### Testing
+
+`tests/hpil_controller_test.c` (21 checks) drives `hpil_wr()`/
+`hpil_rd()` directly — exactly as `nutcpu.c`'s `execp()` would from a
+real `SELPF`/`CH=`/`RDPTRN`/`HPIL=C` opcode sequence — rather than
+crafting actual opcode words and booting the ROM, the same "poke the
+state directly" approach `elite_display_bridge_test.c`/
+`register_decode_test.c` already use. Covers: `init_hpil()`'s documented
+power-on register values; `flgenb` correctly gating whether `hpil_reg[1]`
+reaches `regFI`; `MCL`/`CLIFCR` (status register bits 0/1); a full
+address-then-listen-then-data-write sequence (AAD, LAD, then two ASCII
+bytes) confirmed to land in the video bridge's character grid at the
+right positions; and `hpil_rd(2)`'s FRAV/FRNS-clearing and R1R-to-R1W
+copy behavior. Every pre-existing native test that links `nutcpu.o`
+(`nut_smoke_test`, `display_bridge_test`, `hold_trace_test`) needed a
+small `tests/Makefile` update (`HPIL_OBJS`, appended to each of their
+link recipes) once `hpil_wr`/`hpil_rd` stopped being no-ops — otherwise
+identical, and all still pass unchanged (the real ROM's own cold-start
+`MEMORY LOST` sequence never happens to touch HP-IL opcodes, so this
+was purely a link-time requirement, not a behavior change to those
+tests).
+
+### What's unconfirmed
+
+**The `LA` (Listen Active) bit assumption is the biggest open
+question.** A DOE (data) frame write only reaches the video device
+*exactly once* if the controller's own `hpil_reg[0]` has `LA` (or `TA`)
+set at the time — otherwise the reference protocol's retry logic keeps
+resending the identical frame (bounded here, but still repeatedly),
+and since the video device's own `InData` hook fires on every attempt,
+an unset `LA` would write every character several times over and
+desync the cursor. `tests/hpil_controller_test.c` sets `LA` explicitly
+before any DOE write, matching what real ROM HP-IL driver code
+presumably must do before sending data to an addressed listener — but
+this has **not** been independently confirmed against real ROM
+disassembly the way e.g. the display-format `espaceRAM` bytes or the
+Elite Mode register-decode nibble order were (see those sections
+above for what "confirmed empirically" actually looked like there).
+If real hardware/ROM testing ever shows `LA` gets set differently (or
+not at all) by actual HP-41 HP-IL driver code, `hp41_hpil_controller.c`'s
+`handle_data_register_write()` is where that would need revisiting.
+
+- No real HP-IL loop hardware exists to test against, and no HP-41
+  ROM disassembly of its actual HP-IL driver routines has been done
+  (unlike e.g. the FIX/SCI/ENG `espaceRAM` bytes, found via
+  `tools/flag_array_trace.c`'s exact same "diff real ROM execution"
+  technique — that technique hasn't been pointed at HP-IL yet).
+- Whether the real ROM's `SELPF`/`CH=`/`HPIL=C` opcode sequences even
+  fire at all without a plugged-in module being detected some other
+  way first (a real HP-41 typically probes for a peripheral's presence
+  before talking to it) is unconfirmed.
+
+### What's ahead
+
+Rendering `hp41_hpil_video_bridge_char_at()`'s 32x16 grid onto a real
+Sharp Memory LCD panel needs: `ilvideo-native/font/`'s shared 8x14
+bitmap font (already sized to tile a 400x240 panel exactly at this
+project's own `quad_bringup/`-established cell-pitch convention — see
+that repo's own font generator docstring), a new Pico SDK target
+vendoring the Sharp LCD driver the same way `quad_bringup/third_party/`
+does, and a decision on where that target lives (a new top-level
+directory here, extending `quad_bringup/`, or something else) — not
+yet made. A real hardware/ROM investigation of the `LA`/`TA` assumption
+above would also be worth doing before wiring up real rendering, since
+a hardware bring-up session is exactly the kind of moment
+`tools/flag_array_trace.c`-style empirical tracing has paid off before
+in this project.
 
 ## Elite User Mode — `firmware/hp41_elite_display_bridge.h`/`.c` (currently deactivated)
 
@@ -1871,6 +2099,11 @@ Arduino NHD14432/ NHD14432_POC/ (original, hardware-validated, untouched
 emu41gcc/        Nut CPU emulation core - git submodule, not vendored
                  files (see "The Nut CPU core" above); requires
                  --recurse-submodules or `git submodule update --init`
+ilvideo-native/  HP-82163A Video Interface (HP-IL) simulator - a
+                 separate repo, git submodule, same
+                 --recurse-submodules requirement as emu41gcc/ above.
+                 See "HP-IL video interface" below; only its core/ is
+                 used by soynut today.
 firmware/        Pico SDK project — display bring-up + Nut core wired
                  into the build (emu41gcc_compat/ has the compat shims)
 lcd_bringup/     Standalone Pico SDK project (own CMakeLists.txt, no
@@ -1968,6 +2201,16 @@ DEVLOG.md        Session-by-session development history (gitignored,
 
 ## Known unknowns / next steps
 
+- **HP-IL video interface**: the controller/register protocol and its
+  wiring to the video interface device are real and host-verified (21
+  passing checks), and the whole firmware image cross-compiles cleanly
+  with the new code linked in - but nothing has been confirmed against
+  real hardware or real ROM behavior yet, and the biggest open question
+  (whether/how real HP-41 ROM code sets the `LA` control bit before
+  writing HP-IL data - see that section's "What's unconfirmed" for the
+  full reasoning) is a documented assumption, not a confirmed fact.
+  Rendering to a real Sharp Memory LCD panel hasn't been started. See
+  "HP-IL video interface" above for the full status and what's ahead.
 - **Continuous memory (flash persistence)**: confirmed working on real
   hardware. A value entered and committed with `ENTER` (display checksum
   `0xE3`) survived a genuine reset (`picotool reboot -f`, no `-u`/BOOTSEL

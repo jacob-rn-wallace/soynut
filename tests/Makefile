@@ -24,10 +24,17 @@ BUILD := build
 
 STD := -std=gnu11
 STRICT := -Wall -Wextra -Wpedantic -Werror
-INC := -I$(ROOT)/emu41gcc -I$(ROOT)/firmware/emu41gcc_compat -I$(ROOT)/firmware -I$(ROOT)/font-tables
+INC := -I$(ROOT)/emu41gcc -I$(ROOT)/firmware/emu41gcc_compat -I$(ROOT)/firmware -I$(ROOT)/font-tables -I$(ROOT)/ilvideo-native/core
 NUT_STUBS_INC := -include $(ROOT)/firmware/emu41gcc_compat/nut_stubs.h
 
-TESTS := nut_smoke_test display_bridge_test key_bridge_test key_hold_test hold_trace_test persist_state_test elite_display_bridge_test register_decode_test register_format_test quad_display_bridge_test
+TESTS := nut_smoke_test display_bridge_test key_bridge_test key_hold_test hold_trace_test persist_state_test elite_display_bridge_test register_decode_test register_format_test quad_display_bridge_test hpil_controller_test
+
+# hpil_wr()/hpil_rd() are real now (hp41_hpil_controller.c), not the old
+# no-op stubs - any test that links nutcpu.o (which calls them from
+# execp()/exec0()) needs this whole chain, whether or not that test
+# itself exercises any HP-IL opcode.
+HPIL_OBJS := $(BUILD)/hp41_hpil_controller.o $(BUILD)/hp41_hpil_video_bridge.o \
+             $(BUILD)/hpil_device.o $(BUILD)/ilvideo_term.o $(BUILD)/ilvideo_device.o
 
 .PHONY: all run clean
 all: $(addprefix $(BUILD)/,$(TESTS))
@@ -98,6 +105,25 @@ $(BUILD)/hp41_quad_display_bridge.o: $(ROOT)/firmware/hp41_quad_display_bridge.c
 $(BUILD)/hp41_quad_font_table.o: $(ROOT)/font-tables/hp41_quad_font_table.c | $(BUILD)
 	$(CC) $(STD) $(INC) -c -o $@ $<
 
+$(BUILD)/hp41_hpil_controller.o: $(ROOT)/firmware/hp41_hpil_controller.c | $(BUILD)
+	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
+$(BUILD)/hp41_hpil_video_bridge.o: $(ROOT)/firmware/hp41_hpil_video_bridge.c | $(BUILD)
+	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
+# --- ilvideo-native (git submodule, ../ilvideo-native/ - a separate
+# repo, see its own README) core/: not ours, compiled leniently, same
+# reasoning as the vendored/generated sources above. ---
+
+$(BUILD)/hpil_device.o: $(ROOT)/ilvideo-native/core/hpil_device.c | $(BUILD)
+	$(CC) $(STD) $(INC) -c -o $@ $<
+
+$(BUILD)/ilvideo_term.o: $(ROOT)/ilvideo-native/core/ilvideo_term.c | $(BUILD)
+	$(CC) $(STD) $(INC) -c -o $@ $<
+
+$(BUILD)/ilvideo_device.o: $(ROOT)/ilvideo-native/core/ilvideo_device.c | $(BUILD)
+	$(CC) $(STD) $(INC) -c -o $@ $<
+
 # --- Our own test files: strict warnings apply. ---
 
 $(BUILD)/%_test.o: %_test.c | $(BUILD)
@@ -108,13 +134,13 @@ $(BUILD)/%_test.o: %_test.c | $(BUILD)
 
 $(BUILD)/nut_smoke_test: $(BUILD)/nut_smoke_test.o $(BUILD)/nutcpu.o $(BUILD)/display.o \
                           $(BUILD)/nut_stubs.o $(BUILD)/nut_globals.o $(BUILD)/nut_rom.o \
-                          $(BUILD)/rom_images.o
+                          $(BUILD)/rom_images.o $(HPIL_OBJS)
 	$(CC) -o $@ $^
 
 $(BUILD)/display_bridge_test: $(BUILD)/display_bridge_test.o $(BUILD)/nutcpu.o $(BUILD)/display.o \
                                $(BUILD)/nut_stubs.o $(BUILD)/nut_globals.o $(BUILD)/nut_rom.o \
                                $(BUILD)/hp41_display_bridge.o $(BUILD)/hp41_ascii_decode.o \
-                               $(BUILD)/rom_images.o $(BUILD)/hp41_display_tables.o
+                               $(BUILD)/rom_images.o $(BUILD)/hp41_display_tables.o $(HPIL_OBJS)
 	$(CC) -o $@ $^
 
 $(BUILD)/key_bridge_test: $(BUILD)/key_bridge_test.o $(BUILD)/nut_globals.o \
@@ -128,7 +154,7 @@ $(BUILD)/key_hold_test: $(BUILD)/key_hold_test.o $(BUILD)/nut_globals.o \
 $(BUILD)/hold_trace_test: $(BUILD)/hold_trace_test.o $(BUILD)/nutcpu.o $(BUILD)/display.o \
                           $(BUILD)/nut_stubs.o $(BUILD)/nut_globals.o $(BUILD)/nut_rom.o \
                           $(BUILD)/hp41_key_bridge.o $(BUILD)/hp41_key_hold_bridge.o \
-                          $(BUILD)/rom_images.o
+                          $(BUILD)/rom_images.o $(HPIL_OBJS)
 	$(CC) -o $@ $^
 
 $(BUILD)/persist_state_test: $(BUILD)/persist_state_test.o $(BUILD)/nut_globals.o \
@@ -170,6 +196,16 @@ $(BUILD)/quad_display_bridge_test: $(BUILD)/quad_display_bridge_test.o $(BUILD)/
                                      $(BUILD)/hp41_ascii_decode.o \
                                      $(BUILD)/hp41_register_decode.o $(BUILD)/hp41_register_format.o \
                                      $(BUILD)/hp41_quad_font_table.o
+	$(CC) -o $@ $^
+
+# Drives hpil_wr()/hpil_rd() directly (exactly as a real SELPF/CH=/
+# RDPTRN/HPIL=C opcode sequence would from nutcpu.c's execp()), so no
+# ROM boot / nutcpu.o / nut_stubs.o / nut_rom.o / rom_images.o needed -
+# only nut_globals.o, for regFI's real storage (hp41_hpil_controller.c
+# references it as extern).
+$(BUILD)/hpil_controller_test: $(BUILD)/hpil_controller_test.o $(BUILD)/nut_globals.o \
+                                 $(BUILD)/hp41_hpil_controller.o $(BUILD)/hp41_hpil_video_bridge.o \
+                                 $(BUILD)/hpil_device.o $(BUILD)/ilvideo_term.o $(BUILD)/ilvideo_device.o
 	$(CC) -o $@ $^
 
 run: all
