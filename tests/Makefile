@@ -24,10 +24,10 @@ BUILD := build
 
 STD := -std=gnu11
 STRICT := -Wall -Wextra -Wpedantic -Werror
-INC := -I$(ROOT)/emu41gcc -I$(ROOT)/firmware/emu41gcc_compat -I$(ROOT)/firmware -I$(ROOT)/font-tables -I$(ROOT)/ilvideo-native/core
+INC := -I$(ROOT)/emu41gcc -I$(ROOT)/firmware/emu41gcc_compat -I$(ROOT)/firmware -I$(ROOT)/font-tables -I$(ROOT)/ilvideo-native/core -I$(ROOT)/ilvideo-native/font
 NUT_STUBS_INC := -include $(ROOT)/firmware/emu41gcc_compat/nut_stubs.h
 
-TESTS := nut_smoke_test display_bridge_test key_bridge_test key_hold_test hold_trace_test persist_state_test elite_display_bridge_test register_decode_test register_format_test quad_display_bridge_test hpil_controller_test
+TESTS := nut_smoke_test display_bridge_test key_bridge_test key_hold_test hold_trace_test persist_state_test elite_display_bridge_test register_decode_test register_format_test quad_display_bridge_test hpil_controller_test hpil_video_render_test
 
 # hpil_wr()/hpil_rd() are real now (hp41_hpil_controller.c), not the old
 # no-op stubs - any test that links nutcpu.o (which calls them from
@@ -124,6 +124,12 @@ $(BUILD)/ilvideo_term.o: $(ROOT)/ilvideo-native/core/ilvideo_term.c | $(BUILD)
 $(BUILD)/ilvideo_device.o: $(ROOT)/ilvideo-native/core/ilvideo_device.c | $(BUILD)
 	$(CC) $(STD) $(INC) -c -o $@ $<
 
+$(BUILD)/ilvideo_font.o: $(ROOT)/ilvideo-native/font/ilvideo_font.c | $(BUILD)
+	$(CC) $(STD) $(INC) -c -o $@ $<
+
+$(BUILD)/hp41_hpil_video_render.o: $(ROOT)/firmware/hp41_hpil_video_render.c | $(BUILD)
+	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
 # --- Our own test files: strict warnings apply. ---
 
 $(BUILD)/%_test.o: %_test.c | $(BUILD)
@@ -206,6 +212,16 @@ $(BUILD)/quad_display_bridge_test: $(BUILD)/quad_display_bridge_test.o $(BUILD)/
 $(BUILD)/hpil_controller_test: $(BUILD)/hpil_controller_test.o $(BUILD)/nut_globals.o \
                                  $(BUILD)/hp41_hpil_controller.o $(BUILD)/hp41_hpil_video_bridge.o \
                                  $(BUILD)/hpil_device.o $(BUILD)/ilvideo_term.o $(BUILD)/ilvideo_device.o
+	$(CC) -o $@ $^
+
+# Same "drive hpil_wr()/hpil_rd() directly" approach as
+# hpil_controller_test above, plus the render module itself and
+# ilvideo_font.o for the glyph table it plots.
+$(BUILD)/hpil_video_render_test: $(BUILD)/hpil_video_render_test.o $(BUILD)/nut_globals.o \
+                                   $(BUILD)/hp41_hpil_controller.o $(BUILD)/hp41_hpil_video_bridge.o \
+                                   $(BUILD)/hp41_hpil_video_render.o $(BUILD)/hp41_quad_font_table.o \
+                                   $(BUILD)/hpil_device.o $(BUILD)/ilvideo_term.o $(BUILD)/ilvideo_device.o \
+                                   $(BUILD)/ilvideo_font.o
 	$(CC) -o $@ $^
 
 run: all

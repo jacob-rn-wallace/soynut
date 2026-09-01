@@ -502,11 +502,15 @@ in.
 Standalone Pico SDK project (own `CMakeLists.txt`/`main.c`/`pins.h`, no
 dependency on `emu41gcc`/ROM/key bridge — same isolation pattern as
 `lcd_bringup/`, see "Directory map" below), bringing up a 400x240 Sharp
-Memory LCD (LS027B7DH01) over SPI0 as the first step toward a new
-`quad/` display target showing all four HP-41 stack registers at once
-(see the Magellan project's plan file for the full multi-phase picture —
-this directory is Phase 1 of that plan). Permanent, not a staging area
-that gets emptied into `firmware/` later, same as `lcd_bringup/`.
+Memory LCD (LS027B7DH01) over SPI0 as the first step toward `quad/`, the
+real display target this project's grown into (Phase 4, done — see "The
+`quad/` firmware target" below; originally scoped as "all four HP-41
+stack registers at once," now also showing the classic single line and,
+as of the HP-IL video interface work, a real HP-IL peripheral's own
+screen too). Permanent, not a staging area that gets emptied into
+`firmware/` later, same as `lcd_bringup/` — `quad/`'s own SPI driver is
+vendored from here (see that section), not copied wholesale from this
+directory's `main.c`.
 
 **Vendored dependency:** `third_party/pico_sharpmem_display/` carries
 exactly 4 files (`src/sharpdisp.c` + `include/sharpdisp/sharpdisp.h`,
@@ -547,7 +551,8 @@ completely idle (it has no GDRAM of its own the way the ST7920 does).
 `main.c` refreshes unconditionally on a fixed interval, independent of
 whether the displayed content actually changed, deliberately proving out
 the pattern here before the real `quad/` firmware target (Phase 4 of the
-plan) needs the same idiom in its main loop.
+plan, now built — see "The `quad/` firmware target" below) needed the
+same idiom in its own main loop, which it does.
 
 ## Font / display segment tables
 
@@ -673,10 +678,9 @@ file's Context section for the full reasoning):
 - Regenerate with `python3 font-tables/gen_quad_segment_table.py >
   font-tables/hp41_quad_font_table.c` (needs Pillow — already a soynut
   Python dependency, see `tools/hp41_keyboard_gui.py`).
-- **Not yet consumed by any C code.** This is Phase 2 of the plan only —
-  the actual `hp41_register_format.c`/`hp41_quad_display_bridge.c` that
-  plot into these tables is Phase 3, and the new `quad/` firmware target
-  that links it all together is Phase 4. Both are still ahead.
+- Consumed by `hp41_register_format.c`/`hp41_quad_display_bridge.c`
+  (Phase 3) and linked together into the real `quad/` firmware target
+  (Phase 4, done — see "The `quad/` firmware target" below).
 
 ### Display-format state (FIX/SCI/ENG) — `espaceRAM[114]`/`espaceRAM[115]`
 
@@ -821,6 +825,85 @@ for why that's the opposite of `hp41_display_bridge.h`'s polarity).
   genuinely blank baseline; a real bug in this test (not the production
   code) before that helper existed is preserved as a "watch for" here
   rather than silently forgotten.
+
+## The `quad/` firmware target
+
+**Status: built, and this is the real, currently-flashable firmware for
+the Sharp-LCD physical unit — not a bring-up sandbox.** Sibling to
+`firmware/` (the 144x32 NHD14432 target), own `CMakeLists.txt`/`main.c`/
+`pins.h`, Phase 4 of the Magellan/QUAD plan — this section was missing
+from `CLAUDE.md` until the HP-IL video interface work below prompted a
+pass over it; the target itself predates that work. Builds and links
+cleanly (`cmake -G Ninja -B build && ninja -C build`, same toolchain
+setup as `firmware/`) with zero warnings under this project's own
+strict flags, producing `quad/build/quad.uf2` — not yet confirmed
+against real hardware (see "What's unconfirmed" in the "HP-IL video
+interface" section below, which applies to this whole target, not just
+its newest view).
+
+**Sources, none copied**: `firmware/`'s shared Nut-CPU-emulator bridge/
+persist/key-bridge code (`hp41_key_bridge.c`, `hp41_key_hold_bridge.c`,
+`hp41_persist_state.c`, `hp41_persist_flash.c`, `emu41gcc_compat/*.c`),
+minus the 144x32-specific display bridges (`hp41_display_bridge.c`,
+`hp41_elite_display_bridge.c`, `hp41_arduino_bridge.c`, `st7920.c` are
+not compiled into this target at all — no Elite Mode here, see below);
+`emu41gcc/` (same submodule `firmware/` uses); `quad_bringup/`'s
+vendored `third_party/pico_sharpmem_display/` (the Sharp LCD SPI
+driver, hardware-proven there first); `firmware/hp41_quad_display_bridge.c`/
+`hp41_register_format.c`/`hp41_register_decode.c`/`hp41_ascii_decode.c`
+(Phase 3); and, as of the HP-IL video interface work,
+`firmware/hp41_hpil_controller.c`/`hp41_hpil_video_bridge.c`/
+`hp41_hpil_video_render.c` plus `ilvideo-native/core/`'s three files
+and `ilvideo-native/font/ilvideo_font.c` (see that section below).
+
+**`main.c`** is adapted line-by-line from `firmware/main.c` (same
+precedent `sim/sim_main.c` already set) — persist-state/CLRMEM handling
+and the general `executeNUT()`/key-hold/throttle structure are
+unchanged; what differs is entirely display-related:
+
+- No Elite Mode — that Easter egg is 144x32/NHD14432-specific and
+  stays exclusive to `firmware/`.
+- Sharp LCD SPI push (`sharpdisp_refresh()`) instead of ST7920
+  parallel, plus the periodic forced-refresh heartbeat this panel
+  needs for VCOM/DC-bias health that the ST7920 never did (see "Sharp
+  Memory LCD bring-up" above) — proven out in `quad_bringup/main.c`
+  first, reused here unchanged.
+- **Three views, not the original plan's two**: Stack and Classic-line
+  (`hp41_quad_display_bridge.h`) plus the HP-IL video interface's own
+  screen (`hp41_hpil_video_render.h`) — a `quad_main_view_t` local enum
+  in `main.c` itself, deliberately *not* folded into
+  `hp41_quad_display_bridge.h`'s own `hp41_quad_view_t` (that header
+  stays scoped to the classic HP-41 display alone; see
+  `hp41_hpil_video_render.h`'s header comment). All three are cycled by
+  the existing `"[DSP]"` one-shot bridge command
+  (`hp41_key_bridge_quad_view_toggle_requested()`, Phase 3c) — that
+  command already existed for the original two views; this target is
+  what actually consumes it.
+- **Two independent redraw signals, not one.** The classic/stack views
+  are still gated by `fdsp` (the ROM's own display-dirty flag); the
+  HP-IL video interface's screen has its own independent dirty signal
+  (`hp41_hpil_video_bridge_is_dirty()`), since it isn't driven by the
+  ROM's display registers at all. **A real subtlety, not just a nice-
+  to-have**: `executeNUT()` returns early for as long as `fdsp` stays
+  set (see `emu41gcc/nutcpu.c`), so `main.c` must drain `fdsp`
+  unconditionally every loop iteration regardless of which view is
+  currently showing — leaving it set while the HP-IL video view was
+  selected would stall the CPU at effectively zero throughput. A
+  `classic_view_stale` local remembers that the classic/stack views
+  have newer content than what's currently on the panel even when
+  `fdsp` gets drained while a different view is active, so switching
+  back to either of them later still redraws fresh content instead of
+  something stale.
+- **POWOFF blanking is view-conditional.** `dspon==0` (the calculator's
+  own internal display-on state) only blanks the panel while a
+  classic/stack view is showing — a real HP-82163A module doesn't go
+  blank just because the calculator's own LCD does, since it's a
+  separate peripheral on the loop with its own screen content, not
+  driven by `dspon` at all. Not independently confirmed against real
+  hardware/protocol behavior (same caveat as the HP-IL video interface
+  section's own "What's unconfirmed" below), but blanking an unrelated
+  peripheral's screen because the *calculator's* display turned off
+  would clearly be wrong, so this is the conservative choice.
 
 ## Display bridge — `firmware/hp41_display_bridge.h`/`.c`
 
@@ -1111,19 +1194,26 @@ flags. Not yet confirmed against real hardware or a real HP-41 ROM's
 actual HP-IL driver behavior** — see "What's unconfirmed" below before
 relying on this for anything beyond what's already tested.
 
-This gives soynut a second physical display: an HP-82163A Video
-Interface (32-column x 16-row character display, historically an HP-IL
-peripheral) running *inside the same firmware image* as the Nut CPU
-emulator and the existing NHD14432 display — not a second Pico, not a
-network link. `firmware/hp41_hpil_controller.c` implements the real
-1LB3 HP-IL chip register protocol emu41gcc/nutcpu.c's `execp()` and its
-standalone `HPIL=C n` opcode call into (`init_hpil()`/`hpil_wr()`/
-`hpil_rd()`, declared in the vendored `emu41gcc/hpil.h` and previously
-just no-op stubs in `emu41gcc_compat/nut_stubs.c` — see that file's own
-updated header comment). `firmware/hp41_hpil_video_bridge.c` is the
-other half: it owns the one HP-IL peripheral currently wired onto the
-loop (the video interface itself, via the `ilvideo-native/` submodule
-below) and is what the controller actually hands transmitted frames to.
+This gives the HP-41 an HP-82163A Video Interface (32-column x 16-row
+character display, historically a real HP-IL peripheral) running
+*inside the same firmware image* as the Nut CPU emulator — not a
+second Pico, not a network link. Per the user's own call, this
+peripheral's screen actually renders on `quad/`'s Sharp Memory LCD (its
+own separate physical unit, sharing one Pico with the Nut CPU emulator
+- see "The `quad/` firmware target" below), not alongside `firmware/`'s
+NHD14432; `firmware/`'s own `soynut` binary still links the same HP-IL
+controller/video-bridge code (so `hpil_wr`/`hpil_rd` have real bodies
+there too, and the two firmware images stay in sync rather than
+diverging), it just has nowhere to render that screen and never tries
+to. `firmware/hp41_hpil_controller.c` implements the real 1LB3 HP-IL
+chip register protocol emu41gcc/nutcpu.c's `execp()` and its standalone
+`HPIL=C n` opcode call into (`init_hpil()`/`hpil_wr()`/`hpil_rd()`,
+declared in the vendored `emu41gcc/hpil.h` and previously just no-op
+stubs in `emu41gcc_compat/nut_stubs.c` — see that file's own updated
+header comment). `firmware/hp41_hpil_video_bridge.c` is the other half:
+it owns the one HP-IL peripheral currently wired onto the loop (the
+video interface itself, via the `ilvideo-native/` submodule below) and
+is what the controller actually hands transmitted frames to.
 
 **Why no threading/multicore/network link was needed.** Investigated
 directly from `emu41gcc/nutcpu.c`/`emu41gcc/hpil.h` before writing any
@@ -1162,18 +1252,20 @@ the generic HP-IL device addressing/listen/talk state machine —
 `ilvideo_term.c` — the video interface's 32x16 character grid, 31-row
 scrollback ring, cursor handling, and ESC-sequence protocol — and
 `ilvideo_device.c`, which composes the two). It's pure C with no I/O
-and no platform dependency, wired into `firmware/CMakeLists.txt`'s
-`add_executable(soynut ...)` sources directly (not a separate library
-target) and into `tests/Makefile` the same lenient way vendored/
-generated sources are handled elsewhere in this project (host-native
+and no platform dependency, wired directly into both `firmware/`'s
+`soynut` executable (`hpil_wr`/`hpil_rd` link requirements only — this
+target never renders the video interface's screen anywhere, it just
+needs the symbols to resolve, per "The Nut CPU core" section's
+"Effective ceiling" note above about *why* it's linked in at all even
+here) and, for real rendering, `quad/`'s own executable (which also
+pulls in `ilvideo-native/font/` for the bitmap font — see "The `quad/`
+firmware target" and "Rendering to the Sharp Memory LCD" below). Both
+targets treat it the same lenient way vendored/generated sources are
+handled elsewhere in this project in `tests/Makefile` too (host-native
 tests treat it as "not ours," full warnings not required, same as
-`emu41gcc/*.c`). `ilvideo-native/font/` and its two frontends
-(`macos/`, a standalone SDL2 program; a still-unbuilt Pico + Sharp
-Memory LCD frontend) are **not** used by soynut — those exist in that
-repo for its own independent macOS/Pico targets, unrelated to this
-integration. Rendering the video interface's screen to soynut's own
-physical Sharp Memory LCD hardware is still ahead of where this
-integration currently stands — see "What's ahead" below.
+`emu41gcc/*.c`). `ilvideo-native/macos/` (a standalone SDL2 program) is
+**not** used by soynut — it exists in that repo for its own independent
+macOS target, unrelated to this integration.
 
 **Licensing implication of this dependency** — see the "Nut CPU core"
 section's own "Effective ceiling" note above: `ilvideo-native/` is
@@ -1225,18 +1317,22 @@ the function `hp41_hpil_controller.c` calls on every register-2
 write — is defined here as a single call into
 `ilvideo_device_process_frame()`.
 
-### Wiring into `main.c`
+### Wiring into `main.c` (both `firmware/` and `quad/`)
 
 `hp41_hpil_controller_init()` and `hp41_hpil_video_bridge_init()` are
-called right after `nut_boot()` in the cold-start sequence, mirroring
-the reference emulator's own `init_hpil()` call site (right after ROM/
-module loading, before the CPU ever runs) — not yet reset on
-`[CLRMEM]` or master-clear the way `nut_boot()`'s own state is, since
-HP-IL state isn't part of `hp41_persist_state_t` either (ephemeral,
-like `regPC`/`flagKey`/etc. — see "Continuous memory" above for why
-those are deliberately excluded from persistence too). Nothing yet
-polls `hp41_hpil_video_bridge_is_dirty()`/renders its screen to real
-hardware — see "What's ahead" below.
+called right after `nut_boot()` in the cold-start sequence in both
+targets' `main.c`, mirroring the reference emulator's own `init_hpil()`
+call site (right after ROM/module loading, before the CPU ever runs) —
+not yet reset on `[CLRMEM]` or master-clear the way `nut_boot()`'s own
+state is, since HP-IL state isn't part of `hp41_persist_state_t` either
+(ephemeral, like `regPC`/`flagKey`/etc. — see "Continuous memory" above
+for why those are deliberately excluded from persistence too).
+`firmware/main.c` calls these but never polls
+`hp41_hpil_video_bridge_is_dirty()`/renders the screen anywhere (no
+Sharp LCD on that target); `quad/main.c` does both, as its third
+`"[DSP]"`-toggled view — see "The `quad/` firmware target" above for
+the full integration (the `fdsp`-draining subtlety, view-conditional
+POWOFF blanking, etc.).
 
 ### Testing
 
@@ -1259,6 +1355,17 @@ identical, and all still pass unchanged (the real ROM's own cold-start
 `MEMORY LOST` sequence never happens to touch HP-IL opcodes, so this
 was purely a link-time requirement, not a behavior change to those
 tests).
+
+`tests/hpil_video_render_test.c` (3 checks) covers
+`firmware/hp41_hpil_video_render.c` — the module that plots the video
+bridge's 32x16 grid into a Sharp LCD framebuffer for `quad/` (see "The
+`quad/` firmware target" above) — with the same exact-lit-pixel-count
+technique `display_bridge_test.c`/`quad_display_bridge_test.c` use:
+a blank screen renders zero dark pixels; a single character's dark-
+pixel count matches that glyph's own bit count in
+`ilvideo-native/font/ilvideo_font.c`, computed independently of the
+renderer; two characters' combined count is the exact sum of both
+glyphs (confirming no accidental overlap between cells).
 
 ### What's unconfirmed
 
@@ -1290,21 +1397,32 @@ not at all) by actual HP-41 HP-IL driver code, `hp41_hpil_controller.c`'s
   way first (a real HP-41 typically probes for a peripheral's presence
   before talking to it) is unconfirmed.
 
-### What's ahead
+### Rendering to the Sharp Memory LCD — done, via `quad/`
 
-Rendering `hp41_hpil_video_bridge_char_at()`'s 32x16 grid onto a real
-Sharp Memory LCD panel needs: `ilvideo-native/font/`'s shared 8x14
-bitmap font (already sized to tile a 400x240 panel exactly at this
-project's own `quad_bringup/`-established cell-pitch convention — see
-that repo's own font generator docstring), a new Pico SDK target
-vendoring the Sharp LCD driver the same way `quad_bringup/third_party/`
-does, and a decision on where that target lives (a new top-level
-directory here, extending `quad_bringup/`, or something else) — not
-yet made. A real hardware/ROM investigation of the `LA`/`TA` assumption
-above would also be worth doing before wiring up real rendering, since
-a hardware bring-up session is exactly the kind of moment
-`tools/flag_array_trace.c`-style empirical tracing has paid off before
-in this project.
+Per the user's own call (both the Nut CPU emulator and the video
+interface run on one Pico, and the Sharp LCD is the existing planned
+`quad/` physical unit's own display, not a second screen bolted onto
+the NHD14432-based unit — see "The `quad/` firmware target" above),
+`hp41_hpil_video_render.c` renders `hp41_hpil_video_bridge_char_at()`'s
+32x16 grid through `ilvideo-native/font/`'s shared 8x14 bitmap font
+(already sized to tile the real 400x240 panel exactly — see that
+repo's own font generator docstring) into a Sharp LCD framebuffer, and
+`quad/main.c` wires it in as a third, `"[DSP]"`-toggled view alongside
+the existing Stack/Classic-line views. Host-tested with exact-pixel-
+count checks (`tests/hpil_video_render_test.c`) and confirmed to
+cross-compile cleanly into the real `quad` firmware image. See "The
+`quad/` firmware target" above for the integration specifics
+(independent redraw signals, the `fdsp`-draining subtlety, view-
+conditional POWOFF blanking).
+
+**Still not confirmed on real hardware or against real ROM behavior**
+— that remains true for the whole `LA`/`TA` assumption above, and now
+also for whether the three-view toggle/redraw logic in `quad/main.c`
+actually behaves correctly on a physical panel. A real hardware/ROM
+investigation of the `LA`/`TA` assumption would be worth doing before
+trusting this fully, since a hardware bring-up session is exactly the
+kind of moment `tools/flag_array_trace.c`-style empirical tracing has
+paid off before in this project.
 
 ## Elite User Mode — `firmware/hp41_elite_display_bridge.h`/`.c` (currently deactivated)
 
@@ -2112,9 +2230,14 @@ lcd_bringup/     Standalone Pico SDK project (own CMakeLists.txt, no
                  driver. See "Direct Pico→LCD parallel link" above -
                  kept for reuse if the wiring/shifter setup changes
                  again.
+quad/            The real firmware target for the Sharp-LCD physical
+                 unit (Pico SDK project, own CMakeLists.txt/main.c/
+                 pins.h) - Nut CPU + Stack/Classic-line/HP-IL-video-
+                 interface views, all driving one 400x240 Sharp Memory
+                 LCD. See "The quad/ firmware target" above.
 quad_bringup/   Standalone Pico SDK project, same isolation pattern as
                  lcd_bringup/ - Sharp Memory LCD (400x240, SPI) bring-up
-                 for the planned quad/ four-register display target. See
+                 sandbox quad/'s own SPI driver is vendored from. See
                  "Sharp Memory LCD bring-up" above. third_party/ vendors
                  pico_sharpmem_display (LGPL-2.1) - hard "never edit"
                  black box, same as emu41gcc/.
@@ -2203,14 +2326,18 @@ DEVLOG.md        Session-by-session development history (gitignored,
 
 - **HP-IL video interface**: the controller/register protocol and its
   wiring to the video interface device are real and host-verified (21
-  passing checks), and the whole firmware image cross-compiles cleanly
-  with the new code linked in - but nothing has been confirmed against
-  real hardware or real ROM behavior yet, and the biggest open question
-  (whether/how real HP-41 ROM code sets the `LA` control bit before
-  writing HP-IL data - see that section's "What's unconfirmed" for the
-  full reasoning) is a documented assumption, not a confirmed fact.
-  Rendering to a real Sharp Memory LCD panel hasn't been started. See
-  "HP-IL video interface" above for the full status and what's ahead.
+  passing checks in `tests/hpil_controller_test.c`, 3 more with exact
+  pixel counts in `tests/hpil_video_render_test.c`), and it's now fully
+  wired into the real `quad/` firmware target as a third `"[DSP]"`-
+  toggled view (Sharp Memory LCD, 400x240) alongside the existing
+  Stack/Classic-line views - both `firmware/` and `quad/` cross-compile
+  cleanly with all of this linked in. But nothing has been confirmed
+  against real hardware or real ROM behavior yet, and the biggest open
+  question (whether/how real HP-41 ROM code sets the `LA` control bit
+  before writing HP-IL data - see that section's "What's unconfirmed"
+  for the full reasoning) is a documented assumption, not a confirmed
+  fact. See "HP-IL video interface" and "The `quad/` firmware target"
+  above for the full status.
 - **Continuous memory (flash persistence)**: confirmed working on real
   hardware. A value entered and committed with `ENTER` (display checksum
   `0xE3`) survived a genuine reset (`picotool reboot -f`, no `-u`/BOOTSEL

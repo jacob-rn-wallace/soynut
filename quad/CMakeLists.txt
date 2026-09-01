@@ -25,19 +25,32 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
-# This target's sources live in three sibling directories, none of them
-# copied: firmware/ (the shared Nut-CPU-emulator bridge/persist/key-bridge
-# code, unchanged from the 144x32 target's own list, minus the display
-# bridges that are specific to that target), emu41gcc/ (vendored Nut CPU
-# core, same submodule firmware/ already uses), and quad_bringup/'s
-# vendored third_party/pico_sharpmem_display/ (the Sharp LCD SPI driver,
-# already proven on real hardware there - see that directory's own
-# README-VENDORED.md; hard "never edit" rule, same as emu41gcc/).
+# This target's sources live in four sibling directories/submodules,
+# none of them copied: firmware/ (the shared Nut-CPU-emulator bridge/
+# persist/key-bridge code, unchanged from the 144x32 target's own list,
+# minus the display bridges that are specific to that target, plus the
+# HP-IL controller/video-bridge/render files - see CLAUDE.md's "HP-IL
+# video interface" section), emu41gcc/ (vendored Nut CPU core, same
+# submodule firmware/ already uses), quad_bringup/'s vendored
+# third_party/pico_sharpmem_display/ (the Sharp LCD SPI driver, already
+# proven on real hardware there - see that directory's own
+# README-VENDORED.md; hard "never edit" rule, same as emu41gcc/), and
+# ilvideo-native/ (a separate repo, git submodule, same
+# --recurse-submodules requirement as emu41gcc/ - see its own README
+# and CLAUDE.md's "HP-IL video interface" section for the full
+# provenance).
 set(FIRMWARE_DIR ${CMAKE_CURRENT_LIST_DIR}/../firmware)
 set(EMU41GCC_DIR ${CMAKE_CURRENT_LIST_DIR}/../emu41gcc)
 set(ROMS_DIR ${CMAKE_CURRENT_LIST_DIR}/../roms)
 set(FONT_TABLES_DIR ${CMAKE_CURRENT_LIST_DIR}/../font-tables)
 set(SHARPDISP_DIR ${CMAKE_CURRENT_LIST_DIR}/../quad_bringup/third_party/pico_sharpmem_display)
+
+# ilvideo-native (git submodule, ../ilvideo-native - a separate repo,
+# see its own README) provides the HP-IL video interface's device +
+# terminal logic (core/) and its shared bitmap font (font/) - this
+# target's third view, alongside Stack and Classic-line above. See
+# CLAUDE.md's "HP-IL video interface" section.
+set(ILVIDEO_NATIVE_DIR ${CMAKE_CURRENT_LIST_DIR}/../ilvideo-native)
 
 add_executable(quad
         main.c
@@ -49,6 +62,9 @@ add_executable(quad
         ${FIRMWARE_DIR}/hp41_key_hold_bridge.c
         ${FIRMWARE_DIR}/hp41_persist_state.c
         ${FIRMWARE_DIR}/hp41_persist_flash.c
+        ${FIRMWARE_DIR}/hp41_hpil_controller.c
+        ${FIRMWARE_DIR}/hp41_hpil_video_bridge.c
+        ${FIRMWARE_DIR}/hp41_hpil_video_render.c
         ${SHARPDISP_DIR}/src/sharpdisp.c
         ${SHARPDISP_DIR}/src/bitmap.c
         ${EMU41GCC_DIR}/nutcpu.c
@@ -58,6 +74,10 @@ add_executable(quad
         ${FIRMWARE_DIR}/emu41gcc_compat/nut_rom.c
         ${ROMS_DIR}/rom_images.c
         ${FONT_TABLES_DIR}/hp41_quad_font_table.c
+        ${ILVIDEO_NATIVE_DIR}/core/hpil_device.c
+        ${ILVIDEO_NATIVE_DIR}/core/ilvideo_term.c
+        ${ILVIDEO_NATIVE_DIR}/core/ilvideo_device.c
+        ${ILVIDEO_NATIVE_DIR}/font/ilvideo_font.c
 )
 
 target_include_directories(quad PRIVATE
@@ -66,6 +86,8 @@ target_include_directories(quad PRIVATE
         ${EMU41GCC_DIR}
         ${FONT_TABLES_DIR}
         ${SHARPDISP_DIR}/include
+        ${ILVIDEO_NATIVE_DIR}/core
+        ${ILVIDEO_NATIVE_DIR}/font
 )
 
 # Same tabpage[]/tabbank[] common-symbol reasoning as
@@ -110,6 +132,9 @@ set(QUAD_OWN_SOURCES
         ${FIRMWARE_DIR}/hp41_key_hold_bridge.c
         ${FIRMWARE_DIR}/hp41_persist_state.c
         ${FIRMWARE_DIR}/hp41_persist_flash.c
+        ${FIRMWARE_DIR}/hp41_hpil_controller.c
+        ${FIRMWARE_DIR}/hp41_hpil_video_bridge.c
+        ${FIRMWARE_DIR}/hp41_hpil_video_render.c
         ${FIRMWARE_DIR}/emu41gcc_compat/nut_stubs.c
         ${FIRMWARE_DIR}/emu41gcc_compat/nut_globals.c
         ${FIRMWARE_DIR}/emu41gcc_compat/nut_rom.c
