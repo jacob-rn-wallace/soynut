@@ -1188,10 +1188,17 @@ power cycle, currently wipes the persisted region).
 **Status: real HP-IL protocol logic wired in and host-verified
 end-to-end (21 checks, all passing, plus every pre-existing native test
 still passing with the real logic linked in instead of the old no-op
-stubs), and confirmed to cross-compile cleanly into the real ARM
-firmware image with zero warnings under this project's own strict
-flags. Not yet confirmed against real hardware or a real HP-41 ROM's
-actual HP-IL driver behavior** — see "What's unconfirmed" below before
+stubs), confirmed to cross-compile cleanly into both the `firmware/`
+and `quad/` ARM firmware images with zero warnings under this project's
+own strict flags, and — with a real HP82160A HP-IL Module ROM wired in
+(see "The HP-IL module ROM" below) — confirmed to be genuinely
+exercised by real ROM execution: an ordinary cold boot alone drives
+real HP-IL chip-register activity, and directly executing the module's
+own disassembled code produces exactly the expected register writes.
+**Still not confirmed against real physical hardware** (no real HP-IL
+loop, no real HP-82163A Video Interface to compare against) **or a full
+disassembly of the module's own data-transfer code** (the `LA`-bit
+assumption specifically) — see "What's unconfirmed" below before
 relying on this for anything beyond what's already tested.
 
 This gives the HP-41 an HP-82163A Video Interface (32-column x 16-row
@@ -1367,54 +1374,121 @@ pixel count matches that glyph's own bit count in
 renderer; two characters' combined count is the exact sum of both
 glyphs (confirming no accidental overlap between cells).
 
+### The HP-IL module ROM — `roms/HPIL.MOD`
+
+**A real HP82160A HP-IL Module dump, wired in and confirmed reachable
+by real ROM execution — not just a theoretical possibility anymore.**
+`roms/HPIL.MOD` (gitignored, user-supplied — same "bring your own"
+pattern as the base OS ROM, see `roms/README.md`'s "HP-IL module"
+section) is a genuine **MOD1-format** file — a different, more
+elaborate container than the base OS's plain `.ROM` files (a text
+header carrying title/author/license/page metadata, then one or more
+ROM pages each with their own sub-header and a packed-word payload),
+requiring its own converter:
+
+- **`roms/mod_to_c.py`** parses the MOD1 format and emits one
+  `uint16_t[4096]` array per ROM page, in the same big-endian-unpacked
+  convention `rom_to_c.py`'s own `NUT0`/`1`/`2` arrays use. The exact
+  byte-level field layout it parses against was independently
+  cross-confirmed three separate ways before trusting it: raw
+  byte-offset arithmetic against the real downloaded file (every field
+  boundary landed exactly where the struct math predicted, verified
+  with a throwaway Python script, not eyeballed from a hex dump), the
+  field sizes from Warren Furlow's own public-domain `MOD1.H` (found on
+  GitHub via `mjakuipers/TULIP-DevBoard`, explicitly "PUBLIC DOMAIN -
+  May be freely copied and incorporated into any work" — the container
+  *format*, not the ROM *content*, which is what's actually
+  copyrighted), and `emu41gcc`'s own already-vendored `loadmodule()`
+  unpacking logic (the 5-bytes-to-4-words packing formula) agreeing
+  independently. `roms/HPIL.MOD` itself decodes to two pages —
+  `"ILPrinter-2E"` declared at page 6, `"ILModule-1H"` at page 7 — both
+  with zero out-of-range (>0x3FF) words, and disassembling the result
+  with `tools/nut_disasm.c` showed real, coherent Nut CPU instruction
+  sequences (not garbage), including `SELPF 1` immediately followed by
+  `CH= 01` at page 7 offset 0x01F — the exact HP-IL opcode pair
+  `hp41_hpil_controller.c` implements, found in the module's own real
+  code before any of the rest of this was even wired in.
+- **`firmware/emu41gcc_compat/nut_rom_hpil.h`/`.c`** wires
+  `rom_hpil_p0`/`rom_hpil_p1` into `tabpage[6]`/`tabpage[7]`,
+  `typmod[6]`/`typmod[7]=1` — deliberately a separate function
+  (`nut_rom_wire_hpil_module()`) and a separate file from
+  `nut_rom.c`/`nut_boot()`, *not* folded into the shared boot path:
+  `nut_boot()` is compiled into every target (`firmware/`, `quad/`,
+  every native test, most of `tools/`), so referencing
+  `roms/rom_images_hpil.c`'s arrays from there would force all of them
+  to link a file that only exists if the user has supplied
+  `roms/HPIL.MOD` — breaking every other target's build for anyone who
+  hasn't. Existing tests' exact instruction-count/pixel-count
+  assertions (`nut_smoke_test`, `display_bridge_test`, etc.) stay
+  completely unaffected — confirmed by re-running the full suite after
+  adding this, all still pass unchanged.
+- **Wired in conditionally, not unconditionally**: `quad/CMakeLists.txt`
+  and `tools/Makefile` both check for `roms/rom_images_hpil.c`'s
+  existence at build time (a CMake `if(EXISTS ...)` / Make
+  `$(wildcard ...)` check, not a C-level `#ifdef` in shared logic — the
+  one narrow exception is `quad/main.c`'s own
+  `#ifdef HPIL_MODULE_AVAILABLE` guard around the
+  `nut_rom_wire_hpil_module()` call, matching this project's other
+  documented, narrowly-scoped Rule 8 exceptions) and wire the module in
+  automatically when present, or build fine without it (the
+  `HPIL_VIDEO` view just stays permanently blank, since the base OS
+  alone never drives HP-IL — see below) when absent.
+- **`tools/hpil_module_trace.c`** — the direct follow-up to
+  `hpil_opcode_trace.c` below, with the real module actually wired in.
+  Same positive-control-first discipline. Result, decisively: a
+  **completely ordinary cold boot (`ON`, `ON`, no special key sequence
+  at all) drives real, extensive HP-IL chip-register activity** —
+  `hpil_reg[0]`, `[1]`, `[2]`, `[3]`, `[4]`, `[5]`, `[6]`, and `[8]` all
+  change, and `flgenb` turns on, purely from the base OS's own normal
+  power-on module-scan reaching pages 6-7 and finding something there
+  now. A second test — directly setting `regPC` to the disassembled
+  `SELPF`/`CH=` code at page 7 offset 0x01F and single-stepping through
+  it — confirms `hp41_hpil_controller.c` produces exactly the expected
+  register write (`hpil_reg[8]` updated to the `CH=`'d value) when
+  actually driven by real ROM code, not just synthetic test frames.
+  This is the strongest confirmation this project has of the HP-IL
+  controller's real-world correctness short of physical hardware.
+
 ### What's unconfirmed
 
-**The `LA` (Listen Active) bit assumption is the biggest open
-question.** A DOE (data) frame write only reaches the video device
-*exactly once* if the controller's own `hpil_reg[0]` has `LA` (or `TA`)
-set at the time — otherwise the reference protocol's retry logic keeps
-resending the identical frame (bounded here, but still repeatedly),
-and since the video device's own `InData` hook fires on every attempt,
-an unset `LA` would write every character several times over and
-desync the cursor. `tests/hpil_controller_test.c` sets `LA` explicitly
-before any DOE write, matching what real ROM HP-IL driver code
-presumably must do before sending data to an addressed listener — but
-this has **not** been independently confirmed against real ROM
-disassembly the way e.g. the display-format `espaceRAM` bytes or the
-Elite Mode register-decode nibble order were (see those sections
-above for what "confirmed empirically" actually looked like there).
-If real hardware/ROM testing ever shows `LA` gets set differently (or
-not at all) by actual HP-41 HP-IL driver code, `hp41_hpil_controller.c`'s
-`handle_data_register_write()` is where that would need revisiting.
+**The `LA` (Listen Active) bit assumption is still the biggest open
+question** — now that HP-IL is confirmed *reachable*, this is the next
+thing worth real ROM disassembly attention, not a hypothetical anymore.
+A DOE (data) frame write only reaches the video device *exactly once*
+if the controller's own `hpil_reg[0]` has `LA` (or `TA`) set at the
+time — otherwise the reference protocol's retry logic keeps resending
+the identical frame (bounded here, but still repeatedly), and since the
+video device's own `InData` hook fires on every attempt, an unset `LA`
+would write every character several times over and desync the cursor.
+`tests/hpil_controller_test.c`/`tests/hpil_video_render_test.c` both
+set `LA` explicitly before any DOE write, matching what real ROM HP-IL
+driver code presumably must do before sending data to an addressed
+listener — but this has **not** been independently confirmed against
+real ROM disassembly the way e.g. the display-format `espaceRAM` bytes
+or the Elite Mode register-decode nibble order were (see those
+sections above for what "confirmed empirically" actually looked like
+there). `tools/hpil_module_trace.c`'s cold-boot sweep didn't happen to
+exercise a DOE data write, so it doesn't settle this either way yet -
+disassembling more of `roms/HPIL.MOD`'s own code around real data
+transfers (not just the `SELPF`/`CH=` pair already found) would be the
+natural next empirical step, the same technique that resolved every
+other open question in this section. If real ROM disassembly ever
+shows `LA` gets set differently (or not at all),
+`hp41_hpil_controller.c`'s `handle_data_register_write()` is where
+that would need revisiting.
 
-- No real HP-IL loop hardware exists to test against, and no HP-41
-  ROM disassembly of its actual HP-IL driver routines has been done.
-- **The base ROM (NUT0-2, no HP-IL module) empirically never touches
-  HP-IL under common operations — checked, not just suspected.**
-  `tools/hpil_opcode_trace.c` (same "diff real ROM execution" technique
-  as `tools/flag_array_trace.c`, this time diffing `hpil_reg[]`/
-  `flgenb` instead of `espaceRAM`) drove cold boot+wake, plain
-  arithmetic, all three `CATALOG` variants, and a second power cycle
-  through the real ROM — a positive control (a direct `hpil_wr()` call)
-  confirms the diffing mechanism itself genuinely detects a change, and
-  every one of those real-ROM operations produced **zero** HP-IL state
-  change. This matches real HP-41 history: HP-IL support came from a
-  separate plug-in module (the HP82160A) with its own ROM pages: the
-  base OS by itself most likely has no FOCAL microcode that ever
-  reaches `SELPF`/`HPIL=C` at all. **Practical implication**: as things
-  stand, `hp41_hpil_controller.c` is real, correct, and tested in
-  isolation (`tests/hpil_controller_test.c`, synthetic frames only) and
-  in the real ARM build, but nothing the calculator itself does will
-  ever exercise it — meaningfully exercising this against real ROM
-  execution (not just synthetic frames) needs a real HP-IL module ROM
-  wired in too (same "bring your own ROM" pattern as `roms/README.md`'s
-  existing expansion-ROM list — `HPIL`/`HP82160`-named files aren't
-  currently among the ROM files already present in `roms/`, per a
-  directory listing done alongside this check), which hasn't happened
-  yet. This sweep isn't exhaustive (a few representative operations,
-  not every possible key sequence), so "most likely" rather than
-  "certainly" — but it's real evidence, not just the historical
-  argument alone.
+- No real HP-IL loop hardware exists to test against (a real physical
+  loop, or a real HP-82163A Video Interface module to compare behavior
+  against) — everything confirmed so far is against this project's own
+  emulated Nut CPU core running the real ROM images, not physical
+  hardware.
+- The base ROM (NUT0-2) **alone**, with no HP-IL module present, was
+  separately confirmed to never touch HP-IL under a representative
+  sweep of operations (cold boot, arithmetic, all three `CATALOG`
+  variants, a second power cycle) — see `tools/hpil_opcode_trace.c`.
+  Not exhaustive (a few representative operations, not every possible
+  key sequence), but real evidence, not just the historical argument
+  that HP-IL came from a separate plug-in module.
 
 ### Rendering to the Sharp Memory LCD — done, via `quad/`
 
@@ -2277,9 +2351,12 @@ pico-sdk/        Official raspberrypi/pico-sdk checkout (dependency) -
                  gitignored, not in this repo; see "Toolchain setup"
                  below for how to fetch a matching copy
 roms/            ROM converter/format tools + roms/README.md's BYO
-                 instructions. The actual .ROM files and generated
-                 rom_images.c are gitignored, not in this repo - see
-                 "ROM images" above
+                 instructions - rom_to_c.py for plain .ROM files,
+                 mod_to_c.py for the .MOD (MOD1) container format the
+                 optional HP-IL module ships as. The actual .ROM/.MOD
+                 files and generated rom_images*.c are gitignored, not
+                 in this repo - see "ROM images" and "The HP-IL module
+                 ROM" above
 sim/             Host-native "virtual Pico 2 + virtual LCD" simulator -
                  no pico-sdk/hardware dependency, plain Makefile like
                  tests/. See "Host-native simulator" below.
@@ -2350,13 +2427,18 @@ DEVLOG.md        Session-by-session development history (gitignored,
   wired into the real `quad/` firmware target as a third `"[DSP]"`-
   toggled view (Sharp Memory LCD, 400x240) alongside the existing
   Stack/Classic-line views - both `firmware/` and `quad/` cross-compile
-  cleanly with all of this linked in. But nothing has been confirmed
-  against real hardware or real ROM behavior yet, and the biggest open
-  question (whether/how real HP-41 ROM code sets the `LA` control bit
-  before writing HP-IL data - see that section's "What's unconfirmed"
-  for the full reasoning) is a documented assumption, not a confirmed
-  fact. See "HP-IL video interface" and "The `quad/` firmware target"
-  above for the full status.
+  cleanly with all of this linked in. With a real HP82160A HP-IL Module
+  ROM now wired in too (`roms/HPIL.MOD` - see "The HP-IL module ROM"
+  above), this is confirmed genuinely exercised by real ROM execution,
+  not just synthetic frames: an ordinary cold boot alone drives real
+  HP-IL chip-register activity. Still not confirmed against real
+  physical hardware, and the biggest remaining open question
+  (whether/how real HP-41 ROM code sets the `LA` control bit before
+  writing HP-IL *data* specifically, as opposed to the address/command
+  frames the cold-boot sweep happened to exercise - see that section's
+  "What's unconfirmed" for the full reasoning) is still a documented
+  assumption, not a confirmed fact. See "HP-IL video interface" and
+  "The `quad/` firmware target" above for the full status.
 - **Continuous memory (flash persistence)**: confirmed working on real
   hardware. A value entered and committed with `ENTER` (display checksum
   `0xE3`) survived a genuine reset (`picotool reboot -f`, no `-u`/BOOTSEL

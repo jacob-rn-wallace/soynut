@@ -44,3 +44,54 @@ Not currently wired into the build (no plug-in-module support yet), but
 `rom_to_c.py` and `nut_rom.c` can be extended to load them later if you
 have your own copies: `XNUT0-2.ROM`, `CXFUNS0-1.ROM`, `ADV0-2.ROM`,
 `TIMER.ROM`, `PRINTER.ROM`, `CrdRdr-1E.rom`. Same format rules apply.
+
+## HP-IL module (optional, wired into `quad/` when present)
+
+Unlike the plain `.ROM` files above, this one is a **`.MOD` file**
+(MOD1 container format — a different, more elaborate wrapper: a text
+header with title/author/license/page metadata, then one or more ROM
+pages in their own sub-header + packed-word payload). `HPIL.MOD` (the
+real HP82160A HP-IL Module, 2 pages) is the one currently supported;
+place it in this directory (as `HPIL.MOD`) and convert it with the
+dedicated converter — `rom_to_c.py` doesn't understand this container
+format, `mod_to_c.py` does:
+
+```
+cd roms
+python3 mod_to_c.py HPIL.MOD > rom_images_hpil.c
+```
+
+This prints a summary to stdout (also landing in the generated file
+as trailing comments) telling you which page the file itself declares
+for each array — for `HPIL.MOD` specifically: `rom_hpil_p0`
+("ILPrinter-2E") → page 6, `rom_hpil_p1` ("ILModule-1H") → page 7.
+`firmware/emu41gcc_compat/nut_rom_hpil.c` already expects exactly
+those two array names at exactly those two pages — if you ever
+regenerate from a *different* HP-IL module dump with different
+declared pages, that file's own `tabpage[]`/`typmod[]` assignments
+would need updating to match.
+
+**Genuinely optional, unlike the base OS ROM above**: `quad/`'s own
+`CMakeLists.txt` and `tools/Makefile` both check for
+`roms/rom_images_hpil.c`'s existence at build time and wire it in
+automatically when present, or build without it (with the HP-IL video
+interface view simply staying blank) when absent — no manual
+CMake/Makefile editing needed either way.
+
+**MOD1 format**: public domain, defined by Warren Furlow for V41 (see
+`mod_to_c.py`'s own header comment for the byte-exact field layout this
+was verified against — independently cross-checked three ways: raw
+byte-offset arithmetic against a real file, Furlow's own published
+field sizes, and `emu41gcc`'s own already-vendored `loadmodule()`
+unpacking logic agreeing on the packed-word format). Only ROM pages are
+converted; a MOD file containing RAM pages would have those skipped
+(noted on stderr) — this project has no MLDL-style writable-page
+support.
+
+**Confirmed reachable, not just correct in isolation**: with this
+module wired in, a completely ordinary cold boot (no special key
+sequence) drives real HP-IL chip-register activity — see
+`tools/hpil_module_trace.c` and CLAUDE.md's "HP-IL video interface"
+section for the full empirical confirmation (contrast with the base OS
+*alone*, which `tools/hpil_opcode_trace.c` confirmed never touches
+HP-IL at all).

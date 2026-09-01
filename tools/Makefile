@@ -29,8 +29,19 @@ DESAS_PROTO_INC := -include desas_proto.h
 HPIL_OBJS := $(BUILD)/hp41_hpil_controller.o $(BUILD)/hp41_hpil_video_bridge.o \
              $(BUILD)/hpil_device.o $(BUILD)/ilvideo_term.o $(BUILD)/ilvideo_device.o
 
+# hpil_module_trace needs the real HP-IL module ROM (roms/HPIL.MOD ->
+# roms/rom_images_hpil.c via roms/mod_to_c.py) - genuinely optional,
+# "bring your own" like the base OS ROM - so it's only added to the
+# default build when that generated file actually exists, same
+# CMake-time-existence-check spirit as quad/CMakeLists.txt's own
+# HPIL_MODULE_AVAILABLE handling.
+HPIL_MODULE_ROM := $(ROOT)/roms/rom_images_hpil.c
+ifneq ($(wildcard $(HPIL_MODULE_ROM)),)
+HPIL_MODULE_TARGETS := $(BUILD)/hpil_module_trace
+endif
+
 .PHONY: all clean
-all: $(BUILD)/nut_disasm $(BUILD)/powoff_trace $(BUILD)/flag_array_trace $(BUILD)/hpil_opcode_trace
+all: $(BUILD)/nut_disasm $(BUILD)/powoff_trace $(BUILD)/flag_array_trace $(BUILD)/hpil_opcode_trace $(HPIL_MODULE_TARGETS)
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -59,6 +70,12 @@ $(BUILD)/nut_globals.o: $(ROOT)/firmware/emu41gcc_compat/nut_globals.c | $(BUILD
 
 $(BUILD)/nut_rom.o: $(ROOT)/firmware/emu41gcc_compat/nut_rom.c | $(BUILD)
 	$(CC) $(STD) -fcommon $(STRICT) $(INC) -c -o $@ $<
+
+$(BUILD)/nut_rom_hpil.o: $(ROOT)/firmware/emu41gcc_compat/nut_rom_hpil.c | $(BUILD)
+	$(CC) $(STD) -fcommon $(STRICT) $(INC) -c -o $@ $<
+
+$(BUILD)/rom_images_hpil.o: $(HPIL_MODULE_ROM) | $(BUILD)
+	$(CC) $(STD) $(INC) -c -o $@ $<
 
 $(BUILD)/hp41_hpil_controller.o: $(ROOT)/firmware/hp41_hpil_controller.c | $(BUILD)
 	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
@@ -93,6 +110,9 @@ $(BUILD)/flag_array_trace.o: flag_array_trace.c | $(BUILD)
 $(BUILD)/hpil_opcode_trace.o: hpil_opcode_trace.c | $(BUILD)
 	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
 
+$(BUILD)/hpil_module_trace.o: hpil_module_trace.c | $(BUILD)
+	$(CC) $(STD) $(STRICT) $(INC) -c -o $@ $<
+
 # --- Link recipes. ---
 
 $(BUILD)/nut_disasm: $(BUILD)/nut_disasm.o $(BUILD)/desas41.o $(BUILD)/rom_images.o
@@ -111,6 +131,11 @@ $(BUILD)/flag_array_trace: $(BUILD)/flag_array_trace.o $(BUILD)/nutcpu.o $(BUILD
 $(BUILD)/hpil_opcode_trace: $(BUILD)/hpil_opcode_trace.o $(BUILD)/nutcpu.o $(BUILD)/display.o \
                        $(BUILD)/nut_stubs.o $(BUILD)/nut_globals.o $(BUILD)/nut_rom.o \
                        $(BUILD)/rom_images.o $(HPIL_OBJS)
+	$(CC) -o $@ $^
+
+$(BUILD)/hpil_module_trace: $(BUILD)/hpil_module_trace.o $(BUILD)/nutcpu.o $(BUILD)/display.o \
+                       $(BUILD)/nut_stubs.o $(BUILD)/nut_globals.o $(BUILD)/nut_rom.o \
+                       $(BUILD)/nut_rom_hpil.o $(BUILD)/rom_images.o $(BUILD)/rom_images_hpil.o $(HPIL_OBJS)
 	$(CC) -o $@ $^
 
 clean:

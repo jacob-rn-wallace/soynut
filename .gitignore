@@ -20,7 +20,10 @@ pico-sdk
 # their own legally-obtained ROM files here; see roms/README.md.
 roms/*.ROM
 roms/*.rom
+roms/*.MOD
+roms/*.mod
 roms/rom_images.c
+roms/rom_images_hpil.c
 
 # sim/'s host-file-backed continuous-memory snapshot - local runtime
 # state, not source, same treatment as roms/rom_images.c above.

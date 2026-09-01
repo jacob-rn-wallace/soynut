@@ -90,6 +90,36 @@ target_include_directories(quad PRIVATE
         ${ILVIDEO_NATIVE_DIR}/font
 )
 
+# The HP-IL module ROM (roms/HPIL.MOD -> roms/rom_images_hpil.c via
+# roms/mod_to_c.py) is genuinely optional, unlike the base OS ROM above
+# - "bring your own" per roms/README.md's "HP-IL module" section, and
+# this target still builds and runs fine without it (just with nothing
+# ever driving the HP-IL video interface's screen, since the base OS
+# alone never touches HP-IL opcodes - see CLAUDE.md's "HP-IL video
+# interface" section, "What's unconfirmed"). Wired in conditionally
+# (CMake-time file-existence check, not a C preprocessor #ifdef in the
+# shared logic - main.c's own use of HPIL_MODULE_AVAILABLE below is the
+# one narrow, justified exception, same spirit as this project's other
+# documented Rule 8 exceptions) so a build without roms/HPIL.MOD present
+# doesn't break.
+set(HPIL_MODULE_ROM ${ROMS_DIR}/rom_images_hpil.c)
+if (EXISTS ${HPIL_MODULE_ROM})
+    message(STATUS "quad: HP-IL module ROM found (${HPIL_MODULE_ROM}) - wiring it in")
+    target_sources(quad PRIVATE
+            ${FIRMWARE_DIR}/emu41gcc_compat/nut_rom_hpil.c
+            ${HPIL_MODULE_ROM}
+    )
+    target_compile_definitions(quad PRIVATE HPIL_MODULE_AVAILABLE=1)
+    set_source_files_properties(${FIRMWARE_DIR}/emu41gcc_compat/nut_rom_hpil.c PROPERTIES
+            COMPILE_OPTIONS "-fcommon"
+    )
+    set_property(SOURCE ${FIRMWARE_DIR}/emu41gcc_compat/nut_rom_hpil.c APPEND PROPERTY COMPILE_OPTIONS
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG
+    )
+else ()
+    message(STATUS "quad: HP-IL module ROM not found (${HPIL_MODULE_ROM}) - building without it; see roms/README.md")
+endif ()
+
 # Same tabpage[]/tabbank[] common-symbol reasoning as
 # firmware/CMakeLists.txt's identical block - see that file's own
 # comment for the full explanation. Scoped to exactly the files that

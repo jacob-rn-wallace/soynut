@@ -41,6 +41,7 @@
 #include "hp41_hpil_controller.h"
 #include "hp41_hpil_video_bridge.h"
 #include "hp41_hpil_video_render.h"
+#include "nut_rom_hpil.h"
 
 #define GLOBAL extern
 #include "nutcpu.h"
@@ -191,6 +192,19 @@ int main(void) {
     dbg("quad: hp41_hpil_controller_init()...\n");
     hp41_hpil_controller_init();
     hp41_hpil_video_bridge_init();
+
+    // The HP-IL module ROM (roms/HPIL.MOD) is genuinely optional - see
+    // CMakeLists.txt's own HPIL_MODULE_AVAILABLE comment. Without it,
+    // the base OS alone never touches HP-IL opcodes (confirmed
+    // empirically - see CLAUDE.md's "HP-IL video interface" section),
+    // so the HPIL_VIDEO view would just stay permanently blank; wiring
+    // the module in when present is what actually makes it live.
+#ifdef HPIL_MODULE_AVAILABLE
+    dbg("quad: nut_rom_wire_hpil_module()...\n");
+    nut_rom_wire_hpil_module();
+#else
+    dbg("quad: HP-IL module ROM not built in - HPIL_VIDEO view will stay blank\n");
+#endif
 
     // See firmware/main.c's identical comment: real HP-41 hardware halts
     // the CPU clock entirely after POWOFF, resuming only via a hardware
