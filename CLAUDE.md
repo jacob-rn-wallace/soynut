@@ -1388,14 +1388,33 @@ not at all) by actual HP-41 HP-IL driver code, `hp41_hpil_controller.c`'s
 `handle_data_register_write()` is where that would need revisiting.
 
 - No real HP-IL loop hardware exists to test against, and no HP-41
-  ROM disassembly of its actual HP-IL driver routines has been done
-  (unlike e.g. the FIX/SCI/ENG `espaceRAM` bytes, found via
-  `tools/flag_array_trace.c`'s exact same "diff real ROM execution"
-  technique — that technique hasn't been pointed at HP-IL yet).
-- Whether the real ROM's `SELPF`/`CH=`/`HPIL=C` opcode sequences even
-  fire at all without a plugged-in module being detected some other
-  way first (a real HP-41 typically probes for a peripheral's presence
-  before talking to it) is unconfirmed.
+  ROM disassembly of its actual HP-IL driver routines has been done.
+- **The base ROM (NUT0-2, no HP-IL module) empirically never touches
+  HP-IL under common operations — checked, not just suspected.**
+  `tools/hpil_opcode_trace.c` (same "diff real ROM execution" technique
+  as `tools/flag_array_trace.c`, this time diffing `hpil_reg[]`/
+  `flgenb` instead of `espaceRAM`) drove cold boot+wake, plain
+  arithmetic, all three `CATALOG` variants, and a second power cycle
+  through the real ROM — a positive control (a direct `hpil_wr()` call)
+  confirms the diffing mechanism itself genuinely detects a change, and
+  every one of those real-ROM operations produced **zero** HP-IL state
+  change. This matches real HP-41 history: HP-IL support came from a
+  separate plug-in module (the HP82160A) with its own ROM pages: the
+  base OS by itself most likely has no FOCAL microcode that ever
+  reaches `SELPF`/`HPIL=C` at all. **Practical implication**: as things
+  stand, `hp41_hpil_controller.c` is real, correct, and tested in
+  isolation (`tests/hpil_controller_test.c`, synthetic frames only) and
+  in the real ARM build, but nothing the calculator itself does will
+  ever exercise it — meaningfully exercising this against real ROM
+  execution (not just synthetic frames) needs a real HP-IL module ROM
+  wired in too (same "bring your own ROM" pattern as `roms/README.md`'s
+  existing expansion-ROM list — `HPIL`/`HP82160`-named files aren't
+  currently among the ROM files already present in `roms/`, per a
+  directory listing done alongside this check), which hasn't happened
+  yet. This sweep isn't exhaustive (a few representative operations,
+  not every possible key sequence), so "most likely" rather than
+  "certainly" — but it's real evidence, not just the historical
+  argument alone.
 
 ### Rendering to the Sharp Memory LCD — done, via `quad/`
 
